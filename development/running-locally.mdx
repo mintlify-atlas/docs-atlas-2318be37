@@ -1,0 +1,470 @@
+---
+title: Running Locally
+description: Guide to running and developing the SASCOP BME SubTec application locally
+---
+
+## Quick Start
+
+Once you've completed the [Environment Setup](/development/environment-setup), you can start the development server:
+
+```bash
+python manage.py runserver
+```
+
+The application will be available at `http://localhost:8000`.
+
+## Development Server
+
+### Starting the Server
+
+The Django development server is defined in `manage.py:5-14`:
+
+```python manage.py
+def main():
+    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'bme_subtec.settings')
+    try:
+        from django.core.management import execute_from_command_line
+    except ImportError as exc:
+        raise ImportError(
+            "Couldn't import Django. Are you sure it's installed and "
+            "available on your PYTHONPATH environment variable?"
+        ) from exc
+    execute_from_command_line(sys.argv)
+```
+
+<Steps>
+  <Step title="Activate Virtual Environment">
+    <CodeGroup>
+    ```bash Linux/Mac
+    source venv/bin/activate
+    ```
+    
+    ```bash Windows
+    venv\Scripts\activate
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Start Development Server">
+    ```bash
+    python manage.py runserver
+    ```
+    
+    Or specify a custom port:
+    
+    ```bash
+    python manage.py runserver 8080
+    ```
+    
+    Or bind to all interfaces:
+    
+    ```bash
+    python manage.py runserver 0.0.0.0:8000
+    ```
+  </Step>
+
+  <Step title="Access the Application">
+    Open your browser and navigate to:
+    - Application: `http://localhost:8000`
+    - Admin panel: `http://localhost:8000/admin/`
+    - Operations: `http://localhost:8000/operaciones/`
+  </Step>
+</Steps>
+
+<Note>
+The development server automatically reloads when you make code changes.
+</Note>
+
+## Available URLs
+
+The application URL configuration is defined in `bme_subtec/urls.py:7-20`:
+
+```python bme_subtec/urls.py
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('', include('core.urls')),
+    path('operaciones/', include('operaciones.urls')),
+    
+    # URLs de autenticación - Usando tu vista personalizada
+    path('accounts/login/', custom_login, name='login'),
+    path('accounts/logout/', CustomLogoutView.as_view(next_page='/accounts/login/'), name='logout'),
+    
+    # URLs de módulos extras comentadas por el momento
+    # path('costa-fuera/', include('costa_fuera.urls')),
+    # path('reportes/', include('reportes.urls')),
+]
+```
+
+### Key Endpoints
+
+| Path | Description |
+|------|-------------|
+| `/` | Core module dashboard |
+| `/admin/` | Django admin interface |
+| `/operaciones/` | Operations management |
+| `/accounts/login/` | Custom login page |
+| `/accounts/logout/` | Logout endpoint |
+
+## Development Tools
+
+### Django Shell
+
+Access the Django shell for interactive development:
+
+```bash
+python manage.py shell
+```
+
+Example usage:
+
+```python
+>>> from operaciones.models import PTEHeader, ResponsableProyecto
+>>> ptes = PTEHeader.objects.all()
+>>> print(f"Total PTEs: {ptes.count()}")
+```
+
+### Database Shell
+
+Access PostgreSQL directly:
+
+```bash
+python manage.py dbshell
+```
+
+### Create Superuser
+
+Create an admin account to access `/admin/`:
+
+```bash
+python manage.py createsuperuser
+```
+
+### Run Tests
+
+```bash
+python manage.py test
+```
+
+Run tests for a specific app:
+
+```bash
+python manage.py test operaciones
+```
+
+## Environment Configuration
+
+### Debug Mode
+
+Debug mode is controlled in `bme_subtec/settings.py:11`:
+
+```python bme_subtec/settings.py
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
+```
+
+For local development, set in `.env`:
+
+```bash .env
+DEBUG=True
+```
+
+<Warning>
+**Never enable DEBUG in production!** It exposes sensitive information and impacts performance.
+</Warning>
+
+### Allowed Hosts
+
+For local development (`bme_subtec/settings.py:25-30`):
+
+```python bme_subtec/settings.py
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '0.0.0.0',
+    '*'
+]
+```
+
+### CSRF Trusted Origins
+
+Configure trusted origins for CSRF protection (`bme_subtec/settings.py:13-18`):
+
+```python bme_subtec/settings.py
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost',
+    'http://127.0.0.1',
+    'http://0.0.0.0',
+    'http://54.227.40.69',  
+]
+```
+
+## Static Files
+
+The application uses WhiteNoise for serving static files.
+
+### Configuration
+
+Static files configuration (`bme_subtec/settings.py:129-131`):
+
+```python bme_subtec/settings.py
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'operaciones' / 'static',]
+```
+
+### Collecting Static Files
+
+During development, collect static files:
+
+```bash
+python manage.py collectstatic
+```
+
+For development without prompts:
+
+```bash
+python manage.py collectstatic --noinput
+```
+
+<Note>
+WhiteNoise middleware is configured in `MIDDLEWARE` at `bme_subtec/settings.py:51` to serve static files efficiently.
+</Note>
+
+## Session Management
+
+The application includes custom session timeout middleware (`bme_subtec/settings.py:141-143`):
+
+```python bme_subtec/settings.py
+SESSION_COOKIE_AGE = 7200  # 2 hours
+SESSION_SAVE_EVERY_REQUEST = True 
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+```
+
+The middleware implementation is in `operaciones/middleware.py:5-20`:
+
+```python operaciones/middleware.py
+class SessionTimeoutMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.user.is_authenticated:
+            last_activity = request.session.get('last_activity')
+            if last_activity:
+                idle_time = timezone.now().timestamp() - last_activity
+                if idle_time > settings.SESSION_COOKIE_AGE:
+                    request.session.flush()
+                    return redirect('operaciones:login?session_expired=1')
+            request.session['last_activity'] = timezone.now().timestamp()
+        
+        response = self.get_response(request)
+        return response
+```
+
+## Email Configuration
+
+For local development, configure SMTP settings in `.env`:
+
+```bash .env
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your-email@gmail.com
+EMAIL_HOST_PASSWORD=your-app-password
+DEFAULT_FROM_EMAIL=SASCOP <noreply@sascop.com>
+```
+
+Email configuration is in `bme_subtec/settings.py:148-166`:
+
+```python bme_subtec/settings.py
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+```
+
+### Testing Email
+
+For local testing without sending real emails, use the console backend:
+
+```python bme_subtec/settings.py
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+```
+
+## Management Commands
+
+### Initialize Modules
+
+Initialize system modules:
+
+```bash
+python manage.py inicializar_modulos
+```
+
+### Send Weekly Report
+
+Manually trigger the weekly report:
+
+```bash
+python manage.py fn_enviar_reporte_semanal
+```
+
+### Database Operations
+
+<CodeGroup>
+```bash Migrations
+python manage.py makemigrations
+python manage.py migrate
+```
+
+```bash Data Import/Export
+python manage.py dumpdata > data.json
+python manage.py loaddata data.json
+```
+
+```bash Clear Cache
+python manage.py clear_cache
+```
+</CodeGroup>
+
+## Development Workflow
+
+<Steps>
+  <Step title="Create Feature Branch">
+    ```bash
+    git checkout -b feature/your-feature-name
+    ```
+  </Step>
+
+  <Step title="Make Changes">
+    Edit code, create migrations if needed:
+    ```bash
+    python manage.py makemigrations
+    python manage.py migrate
+    ```
+  </Step>
+
+  <Step title="Test Locally">
+    Start the development server and test your changes:
+    ```bash
+    python manage.py runserver
+    ```
+  </Step>
+
+  <Step title="Run Tests">
+    Ensure all tests pass:
+    ```bash
+    python manage.py test
+    ```
+  </Step>
+
+  <Step title="Commit Changes">
+    ```bash
+    git add .
+    git commit -m "Description of changes"
+    git push origin feature/your-feature-name
+    ```
+  </Step>
+</Steps>
+
+## Hot Reload
+
+The Django development server supports automatic reloading:
+
+- **Python files**: Automatically reloaded when changed
+- **Templates**: Automatically reloaded when changed
+- **Static files**: May require manual refresh or collectstatic
+
+<Note>
+If changes aren't reflected, try restarting the server with `Ctrl+C` and running `python manage.py runserver` again.
+</Note>
+
+## Debugging
+
+### Django Debug Toolbar
+
+Consider installing django-debug-toolbar for enhanced debugging:
+
+```bash
+pip install django-debug-toolbar
+```
+
+### Print Debugging
+
+Use print statements or Python's logging module:
+
+```python
+import logging
+logger = logging.getLogger(__name__)
+
+logger.debug("Debug message")
+logger.info("Info message")
+logger.error("Error message")
+```
+
+### VSCode Launch Configuration
+
+Create `.vscode/launch.json` for debugging:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Django",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/manage.py",
+      "args": ["runserver"],
+      "django": true
+    }
+  ]
+}
+```
+
+## Common Issues
+
+### Port Already in Use
+
+```bash
+# Find process using port 8000
+lsof -ti:8000 | xargs kill -9
+
+# Or use a different port
+python manage.py runserver 8080
+```
+
+### Static Files Not Loading
+
+```bash
+python manage.py collectstatic --noinput
+```
+
+### Database Connection Errors
+
+Verify PostgreSQL is running:
+
+```bash
+sudo systemctl status postgresql
+```
+
+Check your `.env` database credentials.
+
+### Migration Conflicts
+
+```bash
+python manage.py migrate --fake
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Project Structure" icon="folder-tree" href="/development/project-structure">
+    Understand the codebase organization
+  </Card>
+  
+  <Card title="Utilities" icon="wrench" href="/development/utilities">
+    Explore available utility functions
+  </Card>
+</CardGroup>

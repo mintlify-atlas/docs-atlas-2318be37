@@ -1,0 +1,129 @@
+---
+title: "Introduction"
+description: "Project management system for Blue Marine Energy SubTec offshore operations"
+---
+
+## Welcome to SASCOP BME SubTec
+
+SASCOP (Sistema de Administración y Seguimiento de Contratos y Órdenes de Producción) is a comprehensive project management platform designed specifically for Blue Marine Energy SubTec's offshore operations. The system streamlines the entire lifecycle of marine energy projects from proposal to execution and production tracking.
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get up and running with SASCOP in minutes
+  </Card>
+  <Card title="Core Features" icon="grid-2" href="/concepts/architecture">
+    Learn about the system architecture and workflows
+  </Card>
+  <Card title="User Guide" icon="book-open" href="/guides/authentication">
+    Step-by-step guides for common tasks
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/introduction">
+    Integrate with SASCOP programmatically
+  </Card>
+</CardGroup>
+
+## Key Features
+
+SASCOP provides end-to-end project management capabilities for offshore energy operations:
+
+<CardGroup cols={2}>
+  <Card title="PTE Management" icon="file-contract" href="/features/pte/overview">
+    Create and track technical-economic proposals with automated workflow steps
+  </Card>
+  <Card title="Work Orders (OTE)" icon="clipboard-list" href="/features/ote/overview">
+    Schedule, execute, and reprogram work orders with complete lifecycle tracking
+  </Card>
+  <Card title="Production Tracking" icon="chart-line" href="/features/production/overview">
+    Record daily production, manage monthly reports, and track GPU status
+  </Card>
+  <Card title="Query Center" icon="magnifying-glass-chart" href="/features/centro-consulta/overview">
+    Global search across all entities with interactive dashboards and analytics
+  </Card>
+</CardGroup>
+
+## What You Can Do
+
+### For Project Managers
+
+- Create and manage technical-economic proposals (PTEs)
+- Generate work orders from approved proposals
+- Track project progress through customizable workflow steps
+- Schedule and coordinate offshore operations across multiple sites
+- Monitor production against projected volumes
+
+### For Operations Teams
+
+- Record daily production volumes by site and concept
+- Update work order status and completion dates
+- Import Excel annexes and MPP schedules
+- Generate monthly reports with photographic evidence
+- Track GPU (daily production units) status and billing readiness
+
+### For Administrators
+
+- Configure master catalogs (products, sites, clients, fronts)
+- Manage user roles and permissions
+- View comprehensive activity logs
+- Export data to Excel for external analysis
+- Send automated email reports and dashboards
+
+## System Overview
+
+SASCOP is built on Django 4.2 with PostgreSQL and provides:
+
+- **Web-based interface** - Accessible from any device with modern browsers
+- **RESTful API** - Programmatic access for integrations
+- **Real-time updates** - DataTables-powered grids with instant filtering
+- **Import/Export** - Excel and MPP file support via pandas and openpyxl
+- **Email integration** - Automated notifications via SMTP or SendGrid
+- **Activity logging** - Complete audit trail of all user actions
+
+<Note>
+SASCOP is designed for Mexico's offshore energy sector and includes localization for Spanish language (es-mx) and America/Mexico_City timezone.
+</Note>
+
+## Getting Started
+
+<Steps>
+  <Step title="Review System Requirements">
+    Check the [installation guide](/installation) for prerequisites and environment setup
+  </Step>
+  <Step title="Follow the Quickstart">
+    Complete the [quickstart tutorial](/quickstart) to create your first PTE and work order
+  </Step>
+  <Step title="Explore Features">
+    Read the [feature documentation](/features/pte/overview) to understand all capabilities
+  </Step>
+  <Step title="Configure Catalogs">
+    Set up your [catalogs and configuration](/features/catalogs/overview) for your organization
+  </Step>
+</Steps>
+
+## Architecture
+
+SASCOP follows a modular Django architecture with separate apps for different business domains:
+
+- **operaciones** - Core PTE, OTE, and production tracking functionality
+- **core** - Shared utilities, base templates, and dashboard views
+- **costa_fuera** - Offshore-specific extensions and customizations
+- **reportes** - Report generation and export capabilities
+- **cronogramas** - Schedule management and MPP import
+
+Learn more about the system architecture in the [Core Concepts](/concepts/architecture) section.
+
+## Need Help?
+
+<CardGroup cols={2}>
+  <Card title="User Guide" icon="book" href="/guides/authentication">
+    Step-by-step instructions for using SASCOP
+  </Card>
+  <Card title="API Documentation" icon="terminal" href="/api/introduction">
+    Complete API reference for developers
+  </Card>
+  <Card title="Development Guide" icon="code-branch" href="/development/environment-setup">
+    Set up a local development environment
+  </Card>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/StrHiugh/sascop_bme">
+    View source code and report issues
+  </Card>
+</CardGroup>

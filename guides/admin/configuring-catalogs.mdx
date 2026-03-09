@@ -1,0 +1,577 @@
+---
+title: 'Configuring Catalogs'
+description: 'Administrator guide to managing system catalogs and master data'
+icon: 'list-check'
+---
+
+## Overview
+
+Catalogs define the master data used throughout SASCOP BME SubTec. This guide covers how administrators configure and maintain these critical system components.
+
+<Warning>
+  Catalog changes affect all modules. Test changes carefully and communicate updates to users.
+</Warning>
+
+## Catalog Overview
+
+<CardGroup cols={2}>
+  <Card title="Tipos (Types)" icon="tag">
+    Classifications for PTEs, work orders, and concepts
+  </Card>
+  
+  <Card title="Estatus (Status)" icon="traffic-light">
+    Status values for different processes
+  </Card>
+  
+  <Card title="Sitios (Sites)" icon="location-dot">
+    Work locations (vessels, platforms, yards)
+  </Card>
+  
+  <Card title="Frentes (Fronts)" icon="layer-group">
+    Work front classifications
+  </Card>
+  
+  <Card title="Unidades de Medida" icon="ruler">
+    Measurement units
+  </Card>
+  
+  <Card title="Pasos (Steps)" icon="stairs">
+    Workflow steps for PTEs and work orders
+  </Card>
+  
+  <Card title="Conceptos Maestros" icon="book">
+    Master catalog of work concepts and pricing
+  </Card>
+  
+  <Card title="Clientes" icon="building">
+    Client organizations
+  </Card>
+</CardGroup>
+
+## Tipos (Types) Management
+
+### Understanding nivel_afectacion
+
+Types are categorized by impact level:
+
+<Card title="Impact Levels" icon="layer-group">
+  ```python operaciones/views/catalogos.py
+  nivel_texto=Case(
+      When(nivel_afectacion=1, then=Value('PTE')),
+      When(nivel_afectacion=2, then=Value('OT')),
+      When(nivel_afectacion=3, then=Value('Partida')),
+      When(nivel_afectacion=4, then=Value('Produccion')),
+      When(nivel_afectacion=5, then=Value('Clientes')),
+      default=Value('No definido')
+  )
+  ```
+  
+  - **1 - PTE**: Types of technical-economic proposals
+  - **2 - OT**: Work order types (Initial=4, Reprogramming=5)
+  - **3 - Partida**: Line item categories
+  - **4 - Produccion**: Production status types
+  - **5 - Clientes**: Client organization types
+</Card>
+
+### Creating New Type
+
+<Steps>
+  <Step title="Navigate to Types">
+    Go to **Catálogos > Tipos**
+  </Step>
+  
+  <Step title="Click 'Nuevo'">
+    Opens create form
+  </Step>
+  
+  <Step title="Fill Information">
+    ```python operaciones/views/catalogos.py
+    @require_http_methods(["POST"])
+    def crear_tipos(request):
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        
+        tipo = Tipo.objects.create(
+            descripcion=descripcion,
+            nivel_afectacion=afectacion,
+            comentario=comentario,
+            activo=True
+        )
+    ```
+    
+    **Required**:
+    - Description
+    - Impact level (1-5)
+    
+    **Optional**:
+    - Comments
+  </Step>
+  
+  <Step title="Save">
+    New type is immediately available
+  </Step>
+</Steps>
+
+### Editing Types
+
+<Warning>
+  Requires permission: `operaciones.change_tipo`
+</Warning>
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def editar_tipos(request):
+    if not request.user.has_perm('operaciones.change_tipo'):
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'No tienes permisos para editar',
+            'exito': False
+        })
+    
+    tipo = Tipo.objects.get(id=id)
+    tipo.descripcion = request.POST.get('descripcion')
+    tipo.nivel_afectacion = request.POST.get('afectacion')
+    tipo.save()
+```
+
+## Sitios (Sites) Configuration
+
+### Site Structure
+
+Sites are organized by frente (work front):
+
+```python operaciones/views/catalogos.py
+sitios = Sitio.objects.filter(activo=1).annotate(
+    frente_descripcion=F('id_frente__descripcion')
+).order_by('id')
+```
+
+### Creating New Site
+
+<Steps>
+  <Step title="Access Sites Catalog">
+    Navigate to **Catálogos > Sitios**
+  </Step>
+  
+  <Step title="Create Site">
+    ```python
+    @require_http_methods(["POST"])
+    def crear_sitio(request):
+        sitio = Sitio.objects.create(
+            descripcion=request.POST.get('descripcion'),
+            comentario=request.POST.get('comentario', ''),
+            id_frente_id=request.POST.get('id_frente'),
+            activo=True
+        )
+    ```
+  </Step>
+  
+  <Step title="Assign to Frente">
+    Select appropriate work front:
+    - Tierra (1)
+    - Embarcaciones (2)
+    - Plataformas (4)
+    - Intercom (5)
+  </Step>
+</Steps>
+
+<Note>
+  Site selection in work orders is filtered by frente to show only relevant sites.
+</Note>
+
+## Estatus (Status) Management
+
+### Status by Module
+
+Different modules use different status catalogs:
+
+<AccordionGroup>
+  <Accordion title="PTE Status (nivel_afectacion=1)" icon="file-lines">
+    Used for PTE headers:
+    - 1: Activo
+    - 2: En Proceso
+    - 3: Terminado
+    - 4: Cancelado
+    - 9: Suspendido
+  </Accordion>
+  
+  <Accordion title="OT Status (nivel_afectacion=2)" icon="list-check">
+    Used for work orders:
+    - 5: ASIGNADA
+    - 6: EN PROCESO
+    - 7: PAUSADA
+    - 10: COMPLETADA
+    - 11: CANCELADA
+  </Accordion>
+  
+  <Accordion title="Step Status (nivel_afectacion=4)" icon="stairs">
+    Used for PTE/OT steps:
+    - 1: PENDIENTE
+    - 2: PROCESO
+    - 3: COMPLETADO
+    - 14: NO APLICA
+  </Accordion>
+  
+  <Accordion title="Production Status (nivel_afectacion=4)" icon="industry">
+    Used for daily reports:
+    - 17: CERRADO (locked)
+    - Others: Work status types
+  </Accordion>
+</AccordionGroup>
+
+## Unidades de Medida (Units)
+
+### Standard Units
+
+Common measurement units:
+
+<CardGroup cols={3}>
+  <Card title="m²">
+    Square meters
+  </Card>
+  <Card title="kg">
+    Kilograms
+  </Card>
+  <Card title="pza">
+    Pieces
+  </Card>
+  <Card title="m">
+    Meters
+  </Card>
+  <Card title="lt">
+    Liters
+  </Card>
+  <Card title="hr">
+    Hours
+  </Card>
+</CardGroup>
+
+### Creating Units
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_unidad_medida(request):
+    unidad_medida = UnidadMedida.objects.create(
+        descripcion=request.POST.get('descripcion'),
+        clave=request.POST.get('clave'),  # Short code (e.g., "m2")
+        comentario=request.POST.get('comentario', ''),
+        activo=True
+    )
+```
+
+<Note>
+  The "clave" field is used in imports and displays. Keep it concise (2-4 characters).
+</Note>
+
+## Pasos (Steps) Configuration
+
+### Step Types
+
+Steps are categorized by type:
+- **tipo=1**: Main steps
+- **tipo=2**: Substeps (e.g., for Volumetría)
+
+### Creating Steps
+
+```python operaciones/models/pte_models.py
+class Paso(models.Model):
+    descripcion = models.CharField(max_length=200)
+    orden = models.CharField(max_length=10)  # Display order
+    activo = models.BooleanField(default=True)
+    importancia = models.FloatField(default=0)  # Weight for progress
+    tipo = models.IntegerField(default=1)  # 1=main, 2=substep
+    id_tipo_cliente = models.ForeignKey(Tipo)  # Client type
+```
+
+<Steps>
+  <Step title="Define Step">
+    Create step with:
+    - Clear description
+    - Logical order number
+    - Importance weight
+    - Associated client type
+  </Step>
+  
+  <Step title="Auto-Creation">
+    When a PTE is created, steps are automatically generated:
+    
+    ```python operaciones/views/pte.py
+    # Get client type
+    clientes = Cliente.objects.get(id=id_cliente)
+    tipo_cliente = clientes.id_tipo_id
+    
+    # Create steps for this client type
+    pasos = Paso.objects.filter(
+        activo=1, 
+        id_tipo_cliente_id=tipo_cliente
+    ).order_by('id', 'orden')
+    
+    for paso in pasos:
+        PTEDetalle.objects.create(
+            id_pte_header_id=pte_header.id,
+            id_paso_id=paso.id,
+            estatus_paso_id=1  # PENDIENTE
+        )
+    ```
+  </Step>
+</Steps>
+
+## Conceptos Maestros (Master Concepts)
+
+### Concept Types
+
+<Card title="Ordinarios vs Extraordinarios" icon="book">
+  **Conceptos Ordinarios** (tipo_partida=6):
+  - Pre-approved concepts in Anexo C
+  - Fixed pricing
+  - partida_ordinaria field used
+  - sub_anexo assigned (C-2, C-3, etc.)
+  
+  **Conceptos Extraordinarios** (tipo_partida=7):
+  - Project-specific concepts (PUEs)
+  - Require special authorization
+  - partida_extraordinaria field used
+  - Can be converted to ordinarios
+</Card>
+
+### Creating Ordinary Concept
+
+<Steps>
+  <Step title="Navigate to Catalog">
+    **Catálogos > Conceptos Ordinarios**
+  </Step>
+  
+  <Step title="Click 'Nuevo'">
+    Opens creation form
+  </Step>
+  
+  <Step title="Fill Information">
+    - **Partida Ordinaria**: Concept code (e.g., "2.1.1.05")
+    - **Descripción**: Full description
+    - **Anexo**: Sub-annex (C-2, C-3, etc.)
+    - **Unidad de Medida**: Select from catalog
+    - **Precio Unitario MXN**: Unit price in pesos
+    - **Precio Unitario USD**: Unit price in dollars (optional)
+  </Step>
+  
+  <Step title="Save">
+    Concept is available for use in annexes
+  </Step>
+</Steps>
+
+### Creating Extraordinary Concept (PUE)
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_producto(request):
+    id_partida = request.POST.get('id_partida')  # Can be "NA" for pending
+    tipo_partida_id = 7  # Extraordinary
+    
+    concepto = ConceptoMaestro.objects.create(
+        partida_extraordinaria=id_partida,
+        descripcion=descripcion_concepto,
+        id_tipo_partida_id=tipo_partida_id,
+        unidad_medida=unidad_medida,
+        precio_unitario_mn=precio_mn,
+        precio_unitario_usd=precio_usd,
+        pte_creacion=pte_origen,  # Source PTE
+        ot_creacion=ot_origen,    # Source OT
+        estatus='EN ELABORACION',
+        activo=True
+    )
+```
+
+### Converting PUE to Ordinary
+
+Once a PUE is approved:
+
+<Steps>
+  <Step title="Select PUE">
+    From Conceptos Extraordinarios list
+  </Step>
+  
+  <Step title="Click 'Convert'">
+    Opens conversion dialog
+  </Step>
+  
+  <Step title="Assign Partida Ordinaria">
+    Enter official concept code
+  </Step>
+  
+  <Step title="Assign Anexo">
+    Select sub-annex (C-2, C-3, etc.)
+  </Step>
+  
+  <Step title="Confirm Conversion">
+    ```python operaciones/views/catalogos.py
+    @require_http_methods(["POST"])
+    def convertir_pue_a_ordinario(request):
+        concepto = ConceptoMaestro.objects.get(id=pue_id)
+        
+        # Change type to ordinary
+        concepto.id_tipo_partida_id = 6
+        concepto.partida_ordinaria = nueva_partida
+        concepto.sub_anexo = sub_anexo_obj
+        concepto.estatus = "AUTORIZADO"
+        
+        concepto.save()
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Once converted, the PUE becomes available in the ordinary concepts catalog for future use.
+</Note>
+
+## Anexo Structure
+
+Concepts are organized by annex:
+
+<Card title="Annex Hierarchy" icon="sitemap">
+  **AnexoContrato** (Master)
+  - Main contract annex
+  
+  **SubAnexo** (Sub-annexes)
+  - C-2: Structural work
+  - C-3: Mechanical work
+  - C2EXT: Extraordinary structural
+  - C3EXT: Extraordinary mechanical
+  - Custom sub-annexes
+  
+  **ConceptoMaestro** (Concepts)
+  - Individual work items within sub-annexes
+</Card>
+
+## Clientes (Clients) Management
+
+Client configuration affects workflow:
+
+```python operaciones/views/pte.py
+# Steps created based on client type
+clientes = Cliente.objects.get(id=id_cliente)
+tipo_cliente = clientes.id_tipo_id
+
+pasos = Paso.objects.filter(
+    activo=1, 
+    id_tipo_cliente_id=tipo_cliente
+)
+```
+
+<Steps>
+  <Step title="Create Client">
+    Define client organization
+  </Step>
+  
+  <Step title="Assign Type">
+    Select client type (nivel_afectacion=5)
+  </Step>
+  
+  <Step title="Configure Steps">
+    Create appropriate workflow steps for this client type
+  </Step>
+</Steps>
+
+## Data Import and Validation
+
+### Excel Import Validation
+
+When importing annexes, system validates against catalogs:
+
+```python operaciones/views/ote.py
+# Validate units exist
+for u in UnidadMedida.objects.all():
+    unidades_lookup[clean_str(u.clave)] = u.id
+    unidades_lookup[clean_str(u.descripcion)] = u.id
+
+# Validate concepts exist
+for concept in conceptos_db:
+    clave_p = clean_str(concept.partida)
+    clave_c = clean_str(concept.descripcion)
+    clave_u_id = concept.unidad_medida.id
+    
+    key = (clave_p, clave_c, clave_u_id)
+    catalogo_map[key] = concept
+
+# Check each row
+if key_busqueda not in catalogo_map:
+    errores_validacion.append({
+        'OBSERVACIONES_SISTEMA': 'NO ENCONTRADO en catálogo'
+    })
+```
+
+<Warning>
+  Catalog data must be complete and accurate for imports to succeed. Review and test changes before users import data.
+</Warning>
+
+## Maintenance Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Test Changes" icon="flask">
+    Test catalog changes in development before production
+  </Card>
+  
+  <Card title="Communicate Updates" icon="bullhorn">
+    Notify users of new concepts or units
+  </Card>
+  
+  <Card title="Maintain Consistency" icon="equals">
+    Use consistent naming conventions
+  </Card>
+  
+  <Card title="Document Additions" icon="file-pen">
+    Keep log of catalog changes and reasons
+  </Card>
+  
+  <Card title="Deactivate, Don't Delete" icon="ban">
+    Set activo=False instead of deleting
+  </Card>
+  
+  <Card title="Regular Review" icon="calendar-check">
+    Audit catalogs quarterly for obsolete entries
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Import Failures" icon="triangle-exclamation">
+    **Cause**: Catalog data doesn't match Excel
+    
+    **Solution**:
+    - Review error export file
+    - Check unit abbreviations match exactly
+    - Verify concept codes are in catalog
+    - Add missing concepts before re-importing
+  </Accordion>
+  
+  <Accordion title="Cannot Create PTE/OT" icon="ban">
+    **Cause**: Missing required catalog entries
+    
+    **Solution**:
+    - Verify tipos exist for selected type
+    - Check estatus records are active
+    - Ensure pasos exist for client type
+  </Accordion>
+  
+  <Accordion title="Duplicate Concepts" icon="clone">
+    **Cause**: Same partida exists multiple times
+    
+    **Solution**:
+    - Deactivate duplicates (don't delete)
+    - Use most recent/accurate version
+    - Document which is correct
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Managing Users" icon="users-gear" href="/guides/admin/managing-users">
+    User account administration
+  </Card>
+  
+  <Card title="Executing Work Orders" icon="list-check" href="/guides/executing-work-orders">
+    How catalogs are used in work orders
+  </Card>
+</CardGroup>

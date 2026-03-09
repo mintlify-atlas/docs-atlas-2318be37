@@ -1,0 +1,578 @@
+---
+title: 'Recording Production'
+description: 'Track daily production volumes and manage production reporting'
+icon: 'industry'
+---
+
+## Overview
+
+Production tracking in SASCOP BME SubTec allows you to record daily work volumes, track against authorized quantities, and manage production reporting for billing purposes.
+
+## Understanding Production Management
+
+<Card title="Production System Components" icon="cubes">
+  - **Daily Reports**: Track work site attendance/status
+  - **Production Grid**: Enter volumes by concept and day
+  - **GPU Management**: Generator voucher validation
+  - **Monthly Reports**: Consolidate and submit for billing
+</Card>
+
+## Production Workflow
+
+<Steps>
+  <Step title="Daily Report Setup">
+    Mark work site status for each day
+  </Step>
+  
+  <Step title="Production Entry">
+    Record volumes for executed concepts
+  </Step>
+  
+  <Step title="Excess Validation">
+    System flags volumes exceeding authorization
+  </Step>
+  
+  <Step title="GPU Documentation">
+    Attach evidence for validated production
+  </Step>
+  
+  <Step title="Monthly Closure">
+    Lock and submit monthly report
+  </Step>
+</Steps>
+
+## Accessing Production Module
+
+<Steps>
+  <Step title="Navigate to Production">
+    Go to **Operaciones > Producción**
+  </Step>
+  
+  <Step title="Select Work Site">
+    Choose from active sites with executing work orders:
+    
+    ```python operaciones/views/produccion.py
+    @login_required
+    def obtener_sitios_con_ots_ejecutadas(request):
+        ots_activas = OTE.objects.filter(
+            id_tipo_id=4,  # Initial OTs only
+            estatus=1       # Active
+        )
+        
+        # Extract site IDs from various site fields
+        ids_principales = ots_activas.annotate(
+            sitio_real_id=Case(
+                When(id_frente_id__in=[1, 3], then=F('id_patio')),
+                When(id_frente_id__in=[2, 6], then=F('id_embarcacion')),
+                When(id_frente_id__in=[4, 7], then=F('id_plataforma')),
+                When(id_frente_id=5, then=F('id_intercom')),
+            )
+        ).values_list('sitio_real_id', flat=True)
+    ```
+  </Step>
+  
+  <Step title="Select Period">
+    Choose month and year for reporting
+  </Step>
+</Steps>
+
+## Daily Report Grid
+
+### Understanding the Grid
+
+The daily report grid shows:
+- **Rows**: One per active work order at the site
+- **Columns**: Days of the selected month (1-31)
+- **Cells**: Work site status for each day
+
+### Status Types
+
+| Status | Description | Production Allowed |
+|--------|-------------|-------------------|
+| LABORANDO | Working | Yes |
+| STANDBY | On standby | No |
+| NO LABORANDO | Not working | No |
+| CERRADO | Closed/Locked | No (locked) |
+
+### Recording Daily Status
+
+<Steps>
+  <Step title="Click on Day Cell">
+    Select the day to update
+  </Step>
+  
+  <Step title="Choose Status">
+    Select from dropdown
+  </Step>
+  
+  <Step title="Bulk Operations">
+    Use row/column actions to set multiple cells
+  </Step>
+  
+  <Step title="Save Changes">
+    Click **Guardar Reportes** button
+    
+    ```python operaciones/views/produccion.py
+    def guardar_reportes_diarios_masiva(request):
+        data = json.loads(request.body)
+        filas = data.get('reportes', [])
+        mes, anio = int(data.get('mes')), int(data.get('anio'))
+        
+        for fila in filas:
+            reporte_mensual, _ = ReporteMensual.objects.get_or_create(
+                id_ot_id=fila['id_ot'],
+                mes=mes,
+                anio=anio
+            )
+            
+            # Create/update daily reports
+            for dia, status in enumerate(fila['valores'], 1):
+                if status:
+                    ReporteDiario.objects.update_or_create(
+                        id_reporte_mensual=reporte_mensual,
+                        fecha=date(anio, mes, dia),
+                        id_sitio=sitio_obj,
+                        defaults={'id_estatus': status_obj}
+                    )
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Days marked as CERRADO cannot be edited. Contact administrator to unlock.
+</Warning>
+
+## Production Volume Entry
+
+### Accessing Production Grid
+
+<Steps>
+  <Step title="Select Work Order">
+    Choose OT from the site list
+  </Step>
+  
+  <Step title="Choose Time Type">
+    Toggle between:
+    - **TE (Tiempo Extra)**: Overtime
+    - **CMA (Costo de Mano de Ant)**: Regular time
+  </Step>
+  
+  <Step title="View Authorized Volumes">
+    Grid shows imported annex data with authorized quantities
+  </Step>
+</Steps>
+
+### Grid Structure
+
+The production grid displays:
+
+```python operaciones/views/produccion.py
+fila_grid = {
+    'codigo': datos['codigo'],              # Concept code
+    'concepto': datos['concepto'],          # Description
+    'unidad': datos['unidad'],              # Unit of measure
+    'vol_total_proyectado': float(datos['vol_total_proyectado']),  # Authorized
+    'acumulado_mes': 0.0,                   # This month total
+    'acumulado_programado': 0.0,            # Programmed volume
+    'anexo': datos['anexo'],                # Annex (C-2, C-3, etc.)
+    'pu_mn': float(datos['pu_mn']),         # Unit price MXN
+    'pu_usd': float(datos['pu_usd']),       # Unit price USD
+    'estatus_gpu': 'AUTORIZADO',            # GPU status
+    # dia1 through dia31 for daily values
+}
+```
+
+### Entering Production
+
+<Steps>
+  <Step title="Click on Day Cell">
+    Select concept and day intersection
+  </Step>
+  
+  <Step title="Enter Volume">
+    Type the produced quantity
+    
+    <Note>
+      Decimal values are supported (e.g., 3.5)
+    </Note>
+  </Step>
+  
+  <Step title="System Calculates">
+    - Monthly accumulation
+    - Historical accumulation
+    - Excess detection
+  </Step>
+  
+  <Step title="Review Indicators">
+    - **Green**: Within authorization
+    - **Yellow**: Approaching limit
+    - **Red**: Exceeds authorization (blocked for payment)
+  </Step>
+  
+  <Step title="Save Production">
+    Click **Guardar Producción** button
+  </Step>
+</Steps>
+
+### Excess Volume Detection
+
+The system automatically detects when production exceeds authorization:
+
+```python operaciones/views/produccion.py
+def guardar_produccion_masiva(request):
+    # Get authorized volume considering all OT family
+    mapa_autorizado = obtener_volumenes_consolidados(id_ot, codigos)
+    
+    # Calculate running total
+    base_hist = sum(mapa_historia_global[variantes])
+    base_otros = mapa_otros_tiempos.get(id_p, Decimal(0))
+    running_total = base_hist + base_otros
+    
+    for dia, vol in enumerate(valores_dia):
+        running_total += vol
+        
+        # Flag as excess if over limit
+        es_excedente = round(running_total, 4) > vol_autorizado
+        
+        Produccion.objects.create(
+            volumen_produccion=vol,
+            es_excedente=es_excedente,
+            id_estatus_cobro_id=1  # PENDIENTE for normal, special handling for excess
+        )
+```
+
+<Warning>
+  Excess volumes are flagged with `es_excedente=True` and require special authorization for billing.
+</Warning>
+
+## Consolidated Authorization
+
+For work order families (original + reprogramming), authorization is summed:
+
+```python operaciones/views/produccion.py
+def obtener_volumenes_consolidados(id_ot_actual, ids_partidas_codigos):
+    """
+    Calculate total authorized volume summing initial OT and all reprogramming.
+    """
+    ot_actual = OTE.objects.get(id=id_ot_actual)
+    id_principal = ot_actual.ot_principal or ot_actual.id
+    
+    # Get all OTs in family
+    familia_ots = OTE.objects.filter(
+        Q(id=id_principal) | Q(ot_principal=id_principal)
+    ).values_list('id', flat=True)
+    
+    # Get latest authorization for each concept
+    partidas_query = PartidaAnexoImportada.objects.filter(
+        importacion_anexo__ot_id__in=familia_ots,
+        importacion_anexo__es_activo=True,
+        id_partida__in=ids_partidas_codigos
+    ).order_by('id_partida', '-importacion_anexo_id').distinct('id_partida')
+    
+    return {p.id_partida: p.volumen_proyectado for p in partidas_query}
+```
+
+<Note>
+  Reprogramming volumes replace (not add to) original authorizations for the same concept.
+</Note>
+
+## Production Scheduling
+
+Track planned vs actual production:
+
+<Steps>
+  <Step title="Enter Programmed Volumes">
+    Use scheduling interface to plan daily production
+  </Step>
+  
+  <Step title="Compare to Actual">
+    Grid shows both programmed and executed volumes
+  </Step>
+  
+  <Step title="Analyze Variance">
+    Identify delays or over-performance
+  </Step>
+</Steps>
+
+## Time Type Toggle
+
+<Card title="TE vs CMA" icon="clock">
+  **Tiempo Extra (TE)**:
+  - Overtime hours
+  - Special rates may apply
+  - Tracked separately
+  
+  **Costo de Mano de Ant (CMA)**:
+  - Regular working hours
+  - Standard rates
+  - Primary production type
+  
+  Both types accumulate toward authorized totals.
+</Card>
+
+## GPU Management (Generator Vouchers)
+
+### What are GPUs?
+
+<Card title="Generadores de Pago Unitario" icon="file-invoice">
+  GPUs are validation documents required for billing certain production (typically Anexo C-2 and C-3 concepts).
+</Card>
+
+### GPU Workflow
+
+<Steps>
+  <Step title="Production Entry">
+    When you enter production for C-2/C-3 concepts, system auto-creates GPU records:
+    
+    ```python operaciones/views/produccion.py
+    # Auto-create GPUs for valid annexes
+    anexos_validos_gpu = ['C-2', 'C-3', 'C2EXT', 'C3EXT']
+    
+    producciones_validas = Produccion.objects.filter(
+        id_reporte_mensual=reporte_mensual,
+        volumen_produccion__gt=0,
+        id_partida_anexo__anexo__in=anexos_validos_gpu
+    )
+    
+    for prod in producciones_validas:
+        RegistroGPU.objects.get_or_create(
+            id_produccion=prod,
+            defaults={'id_estatus': estatus_pendiente}
+        )
+    ```
+  </Step>
+  
+  <Step title="Access GPU Grid">
+    Navigate to **GPU** tab on production page
+  </Step>
+  
+  <Step title="View GPU Status">
+    Grid shows:
+    - Concept details
+    - Daily volumes requiring validation
+    - Current status (PENDIENTE, VALIDADO, RECHAZADO)
+    - Evidence attachments
+  </Step>
+  
+  <Step title="Upload Evidence">
+    For each GPU:
+    - Click upload icon
+    - Paste URL to evidence file
+    - Update status to VALIDADO
+  </Step>
+  
+  <Step title="Submit for Approval">
+    Mark as VALIDADO when evidence is complete
+  </Step>
+</Steps>
+
+### GPU Status Types
+
+| Status | ID | Description | Action Required |
+|--------|-----|-------------|----------------|
+| PENDIENTE | 19 | Awaiting evidence | Upload documents |
+| EN REVISIÓN | 20 | Under review | Wait for approval |
+| VALIDADO | 21 | Approved | None - ready for billing |
+| RECHAZADO | 22 | Rejected | Provide additional evidence |
+
+## Blocked Days
+
+Days are blocked (not editable) when:
+
+<AccordionGroup>
+  <Accordion title="Outside OT Dates" icon="calendar-xmark">
+    Before start date or after end date of work order (including reprogramming)
+  </Accordion>
+  
+  <Accordion title="Status CERRADO" icon="lock">
+    Daily report marked as CERRADO
+  </Accordion>
+  
+  <Accordion title="OT Vigency" icon="circle-check">
+    ```python operaciones/views/produccion.py
+    for d in range(1, last_day + 1):
+        fecha_dia = date(anio, mes, d)
+        
+        if f_ini and fecha_dia < f_ini:
+            dias_bloqueados.append(d)
+        
+        if f_fin and fecha_dia > f_fin:
+            dias_bloqueados.append(d)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  Production cannot be entered on blocked days. Verify OT dates are correct.
+</Warning>
+
+## Monthly Report Submission
+
+<Steps>
+  <Step title="Complete All Production">
+    Ensure all volumes are entered for the month
+  </Step>
+  
+  <Step title="Validate GPUs">
+    All required GPUs must have evidence attached
+  </Step>
+  
+  <Step title="Upload Evidence File">
+    Attach consolidated monthly evidence:
+    
+    ```python operaciones/views/produccion.py
+    @login_required
+    @require_http_methods(["POST"])
+    def guardar_archivo_mensual(request):
+        data = json.loads(request.body)
+        
+        reporte, created = ReporteMensual.objects.get_or_create(
+            id_ot_id=data['id_ot'],
+            mes=int(data['mes']),
+            anio=int(data['anio'])
+        )
+        
+        reporte.archivo = data['archivo']  # URL to evidence
+        reporte.save()
+    ```
+  </Step>
+  
+  <Step title="Lock Days">
+    Mark days as CERRADO to prevent further edits
+  </Step>
+  
+  <Step title="Submit for Approval">
+    Change monthly report status to EN REVISIÓN
+  </Step>
+</Steps>
+
+## Financial Tracking
+
+The production grid displays real-time financial calculations:
+
+```python operaciones/views/produccion.py
+# Calculate financial impact
+fila_monto_mn = suma_mes_visual * datos['pu_mn']
+fila_monto_usd = suma_mes_visual * datos['pu_usd']
+
+# Aggregate totals
+total_ejec_mn += fila_monto_mn
+total_ejec_usd += fila_monto_usd
+
+totales_financieros = {
+    'aut_mn': float(total_aut_mn),      # Authorized
+    'ejec_mn': float(total_ejec_mn),    # Executed this month
+    'acum_mn': float(total_acum_mn),    # Accumulated to date
+    'resta_mn': float(por_ejecutar_mn)  # Remaining
+}
+```
+
+<Card title="Financial Summary" icon="dollar-sign">
+  Bottom of grid shows:
+  - **Autorizado**: Total authorized amount
+  - **Ejecutado Mes**: This month's production value
+  - **Acumulado**: Historical total
+  - **Por Ejecutar**: Remaining authorization
+  
+  Values shown in both MXN and USD.
+</Card>
+
+## Supervisor Rotation (Guardias)
+
+For sites with rotating supervisors:
+
+<Steps>
+  <Step title="Configure Cycle">
+    Admin sets up 14x14 rotation schedule
+  </Step>
+  
+  <Step title="View Current Supervisor">
+    Calendar shows active supervisor by color:
+    
+    ```python operaciones/views/produccion.py
+    @login_required
+    def obtener_guardias_mes(request):
+        ciclo = CicloGuardia.objects.get(sitio_id=id_sitio)
+        
+        for dia in range(1, ultimo_dia + 1):
+            fecha_actual = date(anio, mes, dia)
+            delta = (fecha_actual - ciclo.fecha_inicio_super_a).days
+            
+            # 14-day rotation
+            turno_idx = (delta // 14) % 2
+            super_activo = ciclo.super_a if turno_idx == 0 else ciclo.super_b
+    ```
+  </Step>
+  
+  <Step title="Track Responsibility">
+    Production is associated with supervisor on duty
+  </Step>
+</Steps>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Daily Entry" icon="calendar-day">
+    Record production daily, not in bulk at month end
+  </Card>
+  
+  <Card title="Verify Volumes" icon="check-double">
+    Double-check entered volumes before saving
+  </Card>
+  
+  <Card title="Monitor Excess" icon="triangle-exclamation">
+    Watch for red-flagged excess volumes
+  </Card>
+  
+  <Card title="Document Everything" icon="paperclip">
+    Attach evidence for all production, especially GPUs
+  </Card>
+  
+  <Card title="Lock Completed Days" icon="lock">
+    Mark days as CERRADO once verified
+  </Card>
+  
+  <Card title="Coordinate with Accounting" icon="handshake">
+    Submit monthly reports on schedule
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Cannot Enter Production" icon="ban">
+    **Possible causes**:
+    - Day is blocked (check OT dates)
+    - Daily report not marked as LABORANDO
+    - No active annex import for OT
+    
+    **Solution**: Verify OT configuration and daily report status
+  </Accordion>
+  
+  <Accordion title="Excess Volume Flagged" icon="flag">
+    **Cause**: Production exceeds authorized quantity
+    
+    **Solution**:
+    - Verify authorization is correct
+    - Check if reprogramming needed
+    - Contact project manager for additional authorization
+  </Accordion>
+  
+  <Accordion title="Concept Not in Grid" icon="question">
+    **Cause**: Concept not in annex import
+    
+    **Solution**: Use "Add Concept" feature to link from master catalog
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Executing Work Orders" icon="list-check" href="/guides/executing-work-orders">
+    Learn about work order management
+  </Card>
+  
+  <Card title="Generating Reports" icon="file-pdf" href="/guides/generating-reports">
+    Create production and financial reports
+  </Card>
+</CardGroup>

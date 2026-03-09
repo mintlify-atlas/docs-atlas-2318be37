@@ -1,0 +1,519 @@
+---
+title: Middleware
+description: Custom middleware components in SASCOP BME SubTec for session management and request processing
+---
+
+## Overview
+
+SASCOP BME SubTec uses Django's middleware system for request/response processing. The application includes custom middleware for session timeout management, along with Django's built-in middleware for security, static files, and authentication.
+
+## Middleware Stack
+
+The middleware configuration is defined in `bme_subtec/settings.py:49-59`:
+
+```python bme_subtec/settings.py
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'operaciones.middleware.SessionTimeoutMiddleware'
+]
+```
+
+<Note>
+Middleware order matters! Middleware is processed top-to-bottom during requests and bottom-to-top during responses.
+</Note>
+
+## Built-in Middleware
+
+### SecurityMiddleware
+
+**Purpose:** Provides security enhancements including HTTPS redirects and security headers.
+
+**Configuration:**
+
+```python bme_subtec/settings.py
+SECURE_CROSS_ORIGIN_OPENER_POLICY = None
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+```
+
+### WhiteNoiseMiddleware
+
+**Purpose:** Serves static files efficiently in production without needing a separate web server.
+
+**Configuration:**
+
+```python bme_subtec/settings.py
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+# Optionally enable compression:
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+
+<Note>
+WhiteNoise must be placed directly after SecurityMiddleware and before all other middleware.
+</Note>
+
+### SessionMiddleware
+
+**Purpose:** Manages sessions across requests.
+
+**Configuration:**
+
+```python bme_subtec/settings.py
+SESSION_COOKIE_AGE = 7200  # 2 hours
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+```
+
+### CommonMiddleware
+
+**Purpose:** Provides common functionality like URL normalization and APPEND_SLASH.
+
+### CsrfViewMiddleware
+
+**Purpose:** Protects against Cross-Site Request Forgery attacks.
+
+**Configuration:**
+
+```python bme_subtec/settings.py
+CSRF_COOKIE_SECURE = False  # Set to True in production with HTTPS
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost',
+    'http://127.0.0.1',
+    'http://0.0.0.0',
+    'http://54.227.40.69',
+]
+```
+
+### AuthenticationMiddleware
+
+**Purpose:** Associates users with requests using sessions.
+
+**Usage:**
+
+```python
+def my_view(request):
+    if request.user.is_authenticated:
+        # User is logged in
+        username = request.user.username
+```
+
+### MessageMiddleware
+
+**Purpose:** Enables temporary message storage for displaying notifications to users.
+
+**Usage:**
+
+```python
+from django.contrib import messages
+
+def my_view(request):
+    messages.success(request, 'Operation completed successfully!')
+    messages.error(request, 'An error occurred.')
+```
+
+### XFrameOptionsMiddleware
+
+**Purpose:** Protects against clickjacking attacks by setting X-Frame-Options header.
+
+## Custom Middleware
+
+### SessionTimeoutMiddleware
+
+Automatically logs out users after a period of inactivity.
+
+**Location:** `operaciones/middleware.py:5-20`
+
+**Implementation:**
+
+```python operaciones/middleware.py
+from django.utils import timezone
+from django.conf import settings
+from django.shortcuts import redirect
+
+class SessionTimeoutMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.user.is_authenticated:
+            last_activity = request.session.get('last_activity')
+            if last_activity:
+                idle_time = timezone.now().timestamp() - last_activity
+                if idle_time > settings.SESSION_COOKIE_AGE:
+                    request.session.flush()
+                    return redirect('operaciones:login?session_expired=1')
+            request.session['last_activity'] = timezone.now().timestamp()
+        
+        response = self.get_response(request)
+        return response
+```
+
+**How It Works:**
+
+<Steps>
+  <Step title="Check Authentication">
+    The middleware first checks if the user is authenticated.
+  </Step>
+
+  <Step title="Track Last Activity">
+    It retrieves the `last_activity` timestamp from the session.
+  </Step>
+
+  <Step title="Calculate Idle Time">
+    Calculates the time elapsed since the last activity:
+    ```python
+    idle_time = timezone.now().timestamp() - last_activity
+    ```
+  </Step>
+
+  <Step title="Enforce Timeout">
+    If idle time exceeds `SESSION_COOKIE_AGE` (2 hours):
+    - Flushes the session
+    - Redirects to login with `session_expired=1` parameter
+  </Step>
+
+  <Step title="Update Activity">
+    Updates the `last_activity` timestamp to the current time for active users.
+  </Step>
+</Steps>
+
+**Configuration:**
+
+The timeout duration is controlled by `SESSION_COOKIE_AGE` in settings:
+
+```python bme_subtec/settings.py
+SESSION_COOKIE_AGE = 7200  # 2 hours in seconds
+```
+
+**Customization:**
+
+To change the timeout period:
+
+```python .env
+SESSION_TIMEOUT=3600  # 1 hour
+```
+
+Then update settings.py:
+
+```python bme_subtec/settings.py
+SESSION_COOKIE_AGE = int(os.getenv('SESSION_TIMEOUT', '7200'))
+```
+
+## Creating Custom Middleware
+
+To create your own middleware:
+
+<Steps>
+  <Step title="Create Middleware Class">
+    Create a new file, e.g., `operaciones/middleware.py`:
+    
+    ```python
+    class MyCustomMiddleware:
+        def __init__(self, get_response):
+            self.get_response = get_response
+            # One-time configuration and initialization
+
+        def __call__(self, request):
+            # Code executed before the view
+            # Modify request here if needed
+            
+            response = self.get_response(request)
+            
+            # Code executed after the view
+            # Modify response here if needed
+            
+            return response
+    ```
+  </Step>
+
+  <Step title="Add to MIDDLEWARE">
+    Add your middleware to the `MIDDLEWARE` list in settings.py:
+    
+    ```python
+    MIDDLEWARE = [
+        # ...
+        'operaciones.middleware.MyCustomMiddleware',
+    ]
+    ```
+  </Step>
+
+  <Step title="Process Methods (Optional)">
+    Implement optional hook methods:
+    
+    ```python
+    class MyCustomMiddleware:
+        # ...
+        
+        def process_view(self, request, view_func, view_args, view_kwargs):
+            # Called before Django calls the view
+            pass
+        
+        def process_exception(self, request, exception):
+            # Called if view raises an exception
+            pass
+        
+        def process_template_response(self, request, response):
+            # Called if response has render() method
+            return response
+    ```
+  </Step>
+</Steps>
+
+## Middleware Examples
+
+### Request Logging Middleware
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+class RequestLoggingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        # Log request details
+        logger.info(f"{request.method} {request.path} from {request.META.get('REMOTE_ADDR')}")
+        
+        response = self.get_response(request)
+        
+        # Log response status
+        logger.info(f"Response status: {response.status_code}")
+        
+        return response
+```
+
+### IP Whitelist Middleware
+
+```python
+from django.http import HttpResponseForbidden
+from django.conf import settings
+
+class IPWhitelistMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+        self.whitelist = getattr(settings, 'ALLOWED_IPS', [])
+
+    def __call__(self, request):
+        ip = request.META.get('REMOTE_ADDR')
+        
+        if self.whitelist and ip not in self.whitelist:
+            return HttpResponseForbidden("Access denied")
+        
+        return self.get_response(request)
+```
+
+### User Activity Tracking Middleware
+
+```python
+from operaciones.models import RegistroActividad
+
+class ActivityTrackingMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        response = self.get_response(request)
+        
+        if request.user.is_authenticated and request.method in ['POST', 'PUT', 'DELETE']:
+            RegistroActividad.objects.create(
+                usuario_id=request.user,
+                accion=request.method,
+                ruta=request.path,
+                ip=request.META.get('REMOTE_ADDR')
+            )
+        
+        return response
+```
+
+### Timezone Middleware
+
+```python
+import pytz
+from django.utils import timezone
+
+class TimezoneMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.user.is_authenticated:
+            # Activate user's timezone (if stored in profile)
+            user_tz = getattr(request.user, 'timezone', 'America/Mexico_City')
+            timezone.activate(pytz.timezone(user_tz))
+        else:
+            timezone.deactivate()
+        
+        return self.get_response(request)
+```
+
+## Middleware Order Best Practices
+
+<Steps>
+  <Step title="Security First">
+    `SecurityMiddleware` should be first to apply security headers early.
+  </Step>
+
+  <Step title="Static Files Early">
+    `WhiteNoiseMiddleware` should be second to serve static files before other processing.
+  </Step>
+
+  <Step title="Session Before Auth">
+    `SessionMiddleware` must come before `AuthenticationMiddleware`.
+  </Step>
+
+  <Step title="Auth Before Views">
+    `AuthenticationMiddleware` must come before any middleware that uses `request.user`.
+  </Step>
+
+  <Step title="Custom Last">
+    Custom middleware like `SessionTimeoutMiddleware` should generally come last.
+  </Step>
+</Steps>
+
+## Testing Middleware
+
+### Unit Testing
+
+```python
+from django.test import TestCase, RequestFactory
+from django.contrib.auth.models import User
+from operaciones.middleware import SessionTimeoutMiddleware
+
+class SessionTimeoutMiddlewareTest(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.user = User.objects.create_user(username='testuser')
+        self.middleware = SessionTimeoutMiddleware(lambda r: None)
+
+    def test_unauthenticated_user(self):
+        request = self.factory.get('/')
+        request.user = None
+        request.session = {}
+        
+        response = self.middleware(request)
+        # Assert expected behavior
+```
+
+### Integration Testing
+
+```python
+from django.test import Client, TestCase
+
+class MiddlewareIntegrationTest(TestCase):
+    def test_session_timeout(self):
+        client = Client()
+        # Login user
+        client.login(username='testuser', password='password')
+        
+        # Verify session timeout behavior
+        # ...
+```
+
+## Debugging Middleware
+
+Add logging to debug middleware execution:
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+class SessionTimeoutMiddleware:
+    def __call__(self, request):
+        logger.debug(f"Processing request: {request.path}")
+        logger.debug(f"User authenticated: {request.user.is_authenticated}")
+        
+        # Middleware logic...
+        
+        logger.debug(f"Response ready")
+        return response
+```
+
+Enable debug logging in settings:
+
+```python
+LOGGING = {
+    'version': 1,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        'operaciones.middleware': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+        },
+    },
+}
+```
+
+## Disabling Middleware
+
+To temporarily disable middleware during testing:
+
+```python
+from django.test import override_settings
+
+@override_settings(MIDDLEWARE=[
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    # SessionTimeoutMiddleware disabled
+])
+class MyTestCase(TestCase):
+    def test_something(self):
+        # Test without session timeout
+        pass
+```
+
+## Performance Considerations
+
+<Warning>
+Middleware runs on **every request**. Keep middleware logic lightweight and avoid expensive operations.
+</Warning>
+
+**Optimization Tips:**
+
+1. **Cache expensive lookups:**
+   ```python
+   from django.core.cache import cache
+   
+   def __call__(self, request):
+       cached_value = cache.get(f'user_{request.user.id}')
+       if not cached_value:
+           cached_value = expensive_operation()
+           cache.set(f'user_{request.user.id}', cached_value, 300)
+   ```
+
+2. **Skip middleware for certain paths:**
+   ```python
+   def __call__(self, request):
+       if request.path.startswith('/static/'):
+           return self.get_response(request)
+       # Process middleware logic
+   ```
+
+3. **Use database connection pooling** if middleware makes database queries
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Utilities" icon="wrench" href="/development/utilities">
+    Explore utility functions and helpers
+  </Card>
+  
+  <Card title="Running Locally" icon="play" href="/development/running-locally">
+    Learn about local development workflow
+  </Card>
+</CardGroup>

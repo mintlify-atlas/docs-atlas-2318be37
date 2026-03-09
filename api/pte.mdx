@@ -1,0 +1,302 @@
+---
+title: 'PTE API'
+description: 'API endpoints for managing Technical Execution Projects (PTEs)'
+icon: 'file-contract'
+---
+
+## Overview
+
+The PTE API provides endpoints to manage Technical Execution Projects, including listing PTEs with pagination and retrieving detailed information about specific PTEs.
+
+## Endpoints
+
+### List PTEs
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.sascop-bme-subtec.com/operaciones/api/ptes/?pagina=1&elementos_por_pagina=10" \
+  -H "Cookie: sessionid=your_session_id"
+```
+
+```python Python
+import requests
+
+session = requests.Session()
+# Assume already logged in
+
+response = session.get(
+    'https://api.sascop-bme-subtec.com/operaciones/api/ptes/',
+    params={
+        'pagina': 1,
+        'elementos_por_pagina': 10
+    }
+)
+
+ptes = response.json()
+print(f"Total pages: {ptes['total_paginas']}")
+for pte in ptes['ptes']:
+    print(f"{pte['oficio_pte']}: {pte['descripcion_trabajo']}")
+```
+
+```javascript JavaScript
+const response = await axios.get('/operaciones/api/ptes/', {
+  params: {
+    pagina: 1,
+    elementos_por_pagina: 10
+  },
+  withCredentials: true
+});
+
+console.log(`Total pages: ${response.data.total_paginas}`);
+response.data.ptes.forEach(pte => {
+  console.log(`${pte.oficio_pte}: ${pte.descripcion_trabajo}`);
+});
+```
+</CodeGroup>
+
+<ParamField query="pagina" type="integer" default="1">
+  Page number for pagination
+</ParamField>
+
+<ParamField query="elementos_por_pagina" type="integer" default="10">
+  Number of items per page
+</ParamField>
+
+<ResponseField name="ptes" type="array">
+  Array of PTE objects
+  
+  <Expandable title="PTE Object">
+    <ResponseField name="id" type="integer">
+      Unique identifier for the PTE
+    </ResponseField>
+    
+    <ResponseField name="oficio_pte" type="string">
+      Official PTE document number
+    </ResponseField>
+    
+    <ResponseField name="descripcion_trabajo" type="string">
+      Description of the work to be performed
+    </ResponseField>
+    
+    <ResponseField name="fecha_solicitud" type="string">
+      Request date in YYYY-MM-DD format
+    </ResponseField>
+    
+    <ResponseField name="responsable_proyecto" type="string">
+      Project manager responsible for the PTE
+    </ResponseField>
+    
+    <ResponseField name="estatus" type="integer">
+      Status: 1=Active, 2=In Process, 3=Completed, 4=Cancelled
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total_paginas" type="integer">
+  Total number of pages available
+</ResponseField>
+
+<ResponseField name="pagina_actual" type="integer">
+  Current page number
+</ResponseField>
+
+<ResponseExample>
+```json Response
+{
+  "ptes": [
+    {
+      "id": 1,
+      "oficio_pte": "PTE-2024-001",
+      "descripcion_trabajo": "Inspección de estructura submarina",
+      "fecha_solicitud": "2024-01-15",
+      "responsable_proyecto": "Ing. Juan Pérez",
+      "estatus": 2
+    },
+    {
+      "id": 2,
+      "oficio_pte": "PTE-2024-002",
+      "descripcion_trabajo": "Mantenimiento preventivo de plataforma",
+      "fecha_solicitud": "2024-01-20",
+      "responsable_proyecto": "Ing. María González",
+      "estatus": 1
+    }
+  ],
+  "total_paginas": 5,
+  "pagina_actual": 1
+}
+```
+</ResponseExample>
+
+### Get PTE Details
+
+Retrieve detailed information about a specific PTE, including all steps and their status.
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.sascop-bme-subtec.com/operaciones/api/ptes/1/" \
+  -H "Cookie: sessionid=your_session_id"
+```
+
+```python Python
+response = session.get(
+    'https://api.sascop-bme-subtec.com/operaciones/api/ptes/1/'
+)
+
+pte = response.json()
+print(f"PTE: {pte['oficio_pte']}")
+print(f"Status: {pte['estatus']}")
+print(f"Steps: {len(pte['detalles'])}")
+
+for detalle in pte['detalles']:
+    print(f"  - {detalle['paso_descripcion']}: {detalle['estatus_pte']}")
+```
+
+```javascript JavaScript
+const response = await axios.get('/operaciones/api/ptes/1/', {
+  withCredentials: true
+});
+
+const pte = response.data;
+console.log(`PTE: ${pte.oficio_pte}`);
+console.log(`Status: ${pte.estatus}`);
+pte.detalles.forEach(detalle => {
+  console.log(`${detalle.paso_descripcion}: ${detalle.estatus_pte}`);
+});
+```
+</CodeGroup>
+
+<ParamField path="pte_id" type="integer" required>
+  The unique identifier of the PTE
+</ParamField>
+
+<ResponseField name="id" type="integer">
+  Unique identifier for the PTE
+</ResponseField>
+
+<ResponseField name="oficio_pte" type="string">
+  Official PTE document number
+</ResponseField>
+
+<ResponseField name="descripcion_trabajo" type="string">
+  Detailed description of the work
+</ResponseField>
+
+<ResponseField name="fecha_solicitud" type="string">
+  Request date (YYYY-MM-DD)
+</ResponseField>
+
+<ResponseField name="plazo_dias" type="number">
+  Deadline in days
+</ResponseField>
+
+<ResponseField name="responsable_proyecto" type="string">
+  Project manager name
+</ResponseField>
+
+<ResponseField name="estatus" type="integer">
+  PTE status (1=Active, 2=In Process, 3=Completed, 4=Cancelled)
+</ResponseField>
+
+<ResponseField name="detalles" type="array">
+  Array of step details
+  
+  <Expandable title="Detail Object">
+    <ResponseField name="paso_descripcion" type="string">
+      Description of the step
+    </ResponseField>
+    
+    <ResponseField name="estatus_pte" type="string">
+      Status of the step
+    </ResponseField>
+    
+    <ResponseField name="fecha_entrega" type="string | null">
+      Delivery date (YYYY-MM-DD) or null
+    </ResponseField>
+    
+    <ResponseField name="comentario" type="string">
+      Comments about the step
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json Response
+{
+  "id": 1,
+  "oficio_pte": "PTE-2024-001",
+  "descripcion_trabajo": "Inspección de estructura submarina en plataforma Alfa",
+  "fecha_solicitud": "2024-01-15",
+  "plazo_dias": 30.0,
+  "responsable_proyecto": "Ing. Juan Pérez",
+  "estatus": 2,
+  "detalles": [
+    {
+      "paso_descripcion": "Revisión de documentación técnica",
+      "estatus_pte": "Completado",
+      "fecha_entrega": "2024-01-18",
+      "comentario": "Documentación revisada y aprobada"
+    },
+    {
+      "paso_descripcion": "Inspección visual submarina",
+      "estatus_pte": "En Proceso",
+      "fecha_entrega": null,
+      "comentario": "Programado para la próxima semana"
+    },
+    {
+      "paso_descripcion": "Elaboración de informe final",
+      "estatus_pte": "Pendiente",
+      "fecha_entrega": null,
+      "comentario": ""
+    }
+  ]
+}
+```
+</ResponseExample>
+
+## Source Code Reference
+
+The PTE API endpoints are implemented in:
+
+**URL Configuration** (`operaciones/urls.py:177-179`)
+```python
+path('api/ptes/', api.api_ptes, name='api_ptes'),
+path('api/ptes/<int:pte_id>/', api.api_pte_detalle, name='api_pte_detalle'),
+```
+
+**View Implementation** (`operaciones/views/api.py:26-82`)
+```python
+@login_required(login_url='/accounts/login/')
+def api_ptes(request):
+    """API para lista de PTE con paginación"""
+    pagina = request.GET.get('pagina', 1)
+    elementos_por_pagina = request.GET.get('elementos_por_pagina', 10)
+    
+    ptes_list = PTEHeader.objects.all().order_by('-fecha_solicitud')
+    paginator = Paginator(ptes_list, elementos_por_pagina)
+    
+    try:
+        ptes = paginator.page(pagina)
+    except:
+        ptes = paginator.page(1)
+    
+    ptes_data = []
+    for pte in ptes:
+        ptes_data.append({
+            'id': pte.id,
+            'oficio_pte': pte.oficio_pte,
+            'descripcion_trabajo': pte.descripcion_trabajo,
+            'fecha_solicitud': pte.fecha_solicitud.strftime('%Y-%m-%d'),
+            'responsable_proyecto': pte.responsable_proyecto,
+            'estatus': pte.estatus,
+        })
+    
+    return JsonResponse({
+        'ptes': ptes_data,
+        'total_paginas': paginator.num_pages,
+        'pagina_actual': ptes.number,
+    })
+```
+
+## Related Models
+
+See [PTE Models](/api/models/pte) for complete data model documentation.

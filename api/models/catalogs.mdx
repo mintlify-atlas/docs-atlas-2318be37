@@ -1,0 +1,685 @@
+---
+title: 'Catalog Models'
+description: 'Data models for master catalogs and reference data'
+icon: 'database'
+---
+
+## Overview
+
+Catalog models provide master data and reference tables used throughout the system for standardization and consistency.
+
+## Tipo
+
+Type classifications for various entities.
+
+**Source:** `operaciones/models/catalogos_models.py:2-19`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="descripcion" type="string" required>
+  Type description (max 200 chars)
+</ParamField>
+
+<ParamField path="nivel_afectacion" type="integer" required>
+  Classification level:
+  - **1**: PTE
+  - **2**: OT
+  - **3**: PARTIDA
+  - **4**: PRODUCCION
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional comments
+</ParamField>
+
+<ParamField path="activo" type="boolean" default="true">
+  Whether type is active
+</ParamField>
+
+### Model Definition
+
+```python
+class Tipo(models.Model):
+    TIPO_CHOICES = [
+        ('1', 'PTE'),
+        ('2', 'OT'),
+        ('3', 'PARTIDA'),
+        ('4', 'PRODUCCION')
+    ]
+    
+    descripcion = models.CharField(max_length=200)
+    nivel_afectacion = models.IntegerField(choices=TIPO_CHOICES, default=0)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'tipo'
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Tipo
+
+# Get PTE types
+pte_types = Tipo.objects.filter(nivel_afectacion=1, activo=True)
+
+# Get OT types
+ot_types = Tipo.objects.filter(nivel_afectacion=2, activo=True)
+```
+
+## Estatus
+
+Status definitions for various processes.
+
+**Source:** `operaciones/models/catalogos_models.py:33-50`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="descripcion" type="string" required>
+  Status description (max 100 chars)
+</ParamField>
+
+<ParamField path="nivel_afectacion" type="integer" required>
+  Applies to:
+  - **1**: PTE status
+  - **2**: OT status
+  - **3**: Billing status (COBRO)
+  - **4**: PTE step status
+  - **5**: Monthly report close status
+  - **6**: Daily operational status
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional notes
+</ParamField>
+
+<ParamField path="activo" type="boolean" default="true">
+  Whether status is active
+</ParamField>
+
+### Model Definition
+
+```python
+class Estatus(models.Model):
+    TIPO_AFECTACION = [
+        ('1', 'PTE'),
+        ('2', 'OT'),
+        ('3', 'COBRO'),
+        ('4', 'PASOS PTE'),
+    ]
+    
+    descripcion = models.CharField(max_length=100)
+    nivel_afectacion = models.IntegerField(choices=TIPO_AFECTACION, default=0)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_estatus'
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Estatus
+
+# Get billing statuses
+billing_statuses = Estatus.objects.filter(
+    nivel_afectacion=3,
+    activo=True
+)
+
+# Get operational statuses for daily reports
+operational_statuses = Estatus.objects.filter(
+    nivel_afectacion=6,
+    activo=True
+)
+```
+
+## Frente
+
+Work fronts (geographical/operational areas).
+
+**Source:** `operaciones/models/catalogos_models.py:21-31`
+
+### Model Definition
+
+```python
+class Frente(models.Model):
+    descripcion = models.CharField(max_length=200)
+    nivel_afectacion = models.IntegerField(blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'frente'
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Frente
+
+# Create front
+frente = Frente.objects.create(
+    descripcion='Golfo de México',
+    nivel_afectacion=1,
+    activo=True
+)
+
+# Get active fronts
+fronts = Frente.objects.filter(activo=True)
+```
+
+## Sitio
+
+Work sites (platforms, vessels, yards, etc.).
+
+**Source:** `operaciones/models/catalogos_models.py:52-61`
+
+### Model Definition
+
+```python
+class Sitio(models.Model):
+    descripcion = models.CharField(max_length=100)
+    activo = models.BooleanField(default=True)
+    id_frente = models.ForeignKey(Frente, on_delete=models.CASCADE, 
+                                  blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'sitio'
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Sitio
+
+# Create site
+sitio = Sitio.objects.create(
+    descripcion='Plataforma Alfa',
+    id_frente_id=1,
+    activo=True
+)
+
+# Get sites by front
+sites = Sitio.objects.filter(
+    id_frente_id=1,
+    activo=True
+).select_related('id_frente')
+```
+
+## UnidadMedida
+
+Measurement units.
+
+**Source:** `operaciones/models/catalogos_models.py:63-72`
+
+### Model Definition
+
+```python
+class UnidadMedida(models.Model):
+    descripcion = models.CharField(max_length=50)
+    clave = models.CharField(max_length=10)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'unidad_medida'
+```
+
+### Example Usage
+
+```python
+from operaciones.models import UnidadMedida
+
+# Create units
+UnidadMedida.objects.create(
+    descripcion='Metro',
+    clave='m',
+    activo=True
+)
+
+UnidadMedida.objects.create(
+    descripcion='Pieza',
+    clave='pza',
+    activo=True
+)
+
+# Query units
+units = UnidadMedida.objects.filter(activo=True).order_by('clave')
+```
+
+## ResponsableProyecto
+
+Project managers/responsible parties.
+
+**Source:** `operaciones/models/catalogos_models.py:74-82`
+
+### Model Definition
+
+```python
+class ResponsableProyecto(models.Model):
+    descripcion = models.CharField(max_length=50)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'responsable_proyecto'
+```
+
+## Cliente
+
+Client organizations.
+
+**Source:** `operaciones/models/catalogos_models.py:84-93`
+
+### Model Definition
+
+```python
+class Cliente(models.Model):
+    descripcion = models.CharField(max_length=100)
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                               blank=True, null=True)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'cliente'
+```
+
+## Contract Management Models
+
+### Categoria
+
+Technical category classifications.
+
+**Source:** `operaciones/models/catalogos_models.py:95-105`
+
+```python
+class Categoria(models.Model):
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_categoria'
+        verbose_name = 'Categoría Técnica'
+```
+
+### SubCategoria
+
+Sub-category classifications.
+
+**Source:** `operaciones/models/catalogos_models.py:107-118`
+
+```python
+class SubCategoria(models.Model):
+    categoria = models.ForeignKey(Categoria, on_delete=models.CASCADE, 
+                                 related_name='subcategorias', 
+                                 null=True, blank=True)
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_subcategoria'
+        unique_together = ['categoria', 'clave']
+```
+
+### Clasificacion
+
+Detailed classifications.
+
+**Source:** `operaciones/models/catalogos_models.py:120-131`
+
+```python
+class Clasificacion(models.Model):
+    subcategoria = models.ForeignKey(SubCategoria, on_delete=models.CASCADE, 
+                                    related_name='clasificaciones', 
+                                    null=True, blank=True)
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_clasificacion'
+        unique_together = ['subcategoria', 'clave']
+```
+
+### Contrato
+
+Contract master records.
+
+**Source:** `operaciones/models/catalogos_models.py:133-147`
+
+```python
+class Contrato(models.Model):
+    numero_contrato = models.CharField(max_length=100, unique=True, 
+                                      verbose_name="No. Contrato", 
+                                      null=True, blank=True)
+    descripcion = models.TextField(null=True, blank=True)
+    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, 
+                               null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    monto_mn = models.DecimalField(max_digits=20, decimal_places=2, 
+                                  default=0, null=True, blank=True)
+    monto_usd = models.DecimalField(max_digits=20, decimal_places=2, 
+                                   default=0, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'contrato'
+```
+
+### AnexoContrato
+
+Contract annexes.
+
+**Source:** `operaciones/models/catalogos_models.py:149-168`
+
+```python
+class AnexoContrato(models.Model):
+    TIPO_ANEXO = [
+        ('TECNICO', 'Anexo Técnico (Especificaciones)'),
+        ('FINANCIERO', 'Anexo C (Lista de Precios)'),
+        ('LEGAL', 'Legal/Administrativo'),
+    ]
+    
+    contrato = models.ForeignKey(Contrato, on_delete=models.CASCADE, 
+                                related_name='anexos_maestros')
+    clave = models.CharField(max_length=100, null=True, blank=True)
+    descripcion = models.CharField(max_length=100, null=True, blank=True)
+    tipo = models.CharField(max_length=20, choices=TIPO_ANEXO, 
+                           default='FINANCIERO')
+    archivo = models.FileField(upload_to='contratos/anexos_maestros/', 
+                              null=True, blank=True)
+    monto_mn = models.DecimalField(max_digits=20, decimal_places=2, 
+                                  default=0, null=True, blank=True)
+    monto_usd = models.DecimalField(max_digits=20, decimal_places=2, 
+                                   default=0, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'contrato_anexo_maestro'
+```
+
+### SubAnexo
+
+Sub-annexes within a contract annex.
+
+**Source:** `operaciones/models/catalogos_models.py:170-187`
+
+```python
+class SubAnexo(models.Model):
+    anexo_maestro = models.ForeignKey(AnexoContrato, on_delete=models.CASCADE, 
+                                     related_name='sub_anexos')
+    clave_anexo = models.CharField(max_length=50)
+    descripcion = models.TextField()
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE, 
+                                     null=True, blank=True)
+    cantidad = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    precio_unitario_mn = models.DecimalField(max_digits=20, decimal_places=2, 
+                                            default=0)
+    precio_unitario_usd = models.DecimalField(max_digits=20, decimal_places=2, 
+                                             default=0)
+    importe_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    importe_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    activo = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'contrato_sub_anexo'
+        ordering = ['clave_anexo']
+        unique_together = ['anexo_maestro', 'clave_anexo']
+```
+
+### ConceptoMaestro
+
+Master concepts (ordinarios y extraordinarios).
+
+**Source:** `operaciones/models/catalogos_models.py:189-221`
+
+```python
+class ConceptoMaestro(models.Model):
+    sub_anexo = models.ForeignKey(SubAnexo, on_delete=models.CASCADE, 
+                                 related_name='conceptos', 
+                                 null=True, blank=True)
+    partida_ordinaria = models.CharField(max_length=50, null=True, blank=True)
+    codigo_interno = models.CharField(max_length=50, blank=True, null=True)
+    descripcion = models.TextField()
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.PROTECT)
+    cantidad = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    precio_unitario_mn = models.DecimalField(max_digits=18, decimal_places=2, 
+                                            default=0, null=True, blank=True)
+    precio_unitario_usd = models.DecimalField(max_digits=18, decimal_places=2, 
+                                             default=0, null=True, blank=True)
+    id_tipo_partida = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                       limit_choices_to={'nivel_afectacion': 3})
+    categoria = models.TextField(null=True, blank=True)
+    subcategoria = models.TextField(null=True, blank=True)
+    clasificacion = models.TextField(null=True, blank=True)
+
+    # For PUEs (Extraordinary items)
+    partida_extraordinaria = models.CharField(max_length=50, null=True, 
+                                             blank=True)
+    pte_creacion = models.CharField(max_length=100, null=True, blank=True)
+    ot_creacion = models.CharField(max_length=100, null=True, blank=True)
+    fecha_autorizacion = models.DateField(null=True, blank=True)
+    estatus = models.CharField(max_length=20, blank=True, null=True)
+
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'contrato_concepto_maestro'
+        indexes = [
+            models.Index(fields=['partida_ordinaria']),
+            models.Index(fields=['sub_anexo']),
+        ]
+```
+
+## Catalog Hierarchy
+
+<Steps>
+  <Step title="Tipo">
+    Base classification for entities (PTE, OT, PARTIDA, PRODUCCION)
+  </Step>
+  
+  <Step title="Estatus">
+    Status for each tipo and process
+  </Step>
+  
+  <Step title="Frente">
+    Geographical/operational work fronts
+  </Step>
+  
+  <Step title="Sitio">
+    Specific sites within fronts (platforms, vessels, yards)
+  </Step>
+  
+  <Step title="Cliente">
+    Client organizations linked to tipos
+  </Step>
+</Steps>
+
+## Contract Hierarchy
+
+<Steps>
+  <Step title="Contrato">
+    Master contract record
+  </Step>
+  
+  <Step title="AnexoContrato">
+    Annexes within the contract (Technical, Financial, Legal)
+  </Step>
+  
+  <Step title="SubAnexo">
+    Sub-sections within an annex (e.g., C-1, C-2, C-3)
+  </Step>
+  
+  <Step title="ConceptoMaestro">
+    Individual line items (ordinarios and PUEs)
+  </Step>
+</Steps>
+
+## Technical Classification Hierarchy
+
+```
+Categoria (e.g., "Structural")
+  └─ SubCategoria (e.g., "Welding")
+      └─ Clasificacion (e.g., "SMAW")
+```
+
+## Example Queries
+
+### Get All Active Catalogs
+
+```python
+from operaciones.models import Tipo, Estatus, Frente, Sitio
+
+# Get all active types
+active_types = Tipo.objects.filter(activo=True)
+
+# Get all active statuses by level
+pte_statuses = Estatus.objects.filter(nivel_afectacion=1, activo=True)
+ot_statuses = Estatus.objects.filter(nivel_afectacion=2, activo=True)
+
+# Get fronts with sites
+fronts_with_sites = Frente.objects.filter(
+    activo=True
+).prefetch_related('sitio_set')
+
+for frente in fronts_with_sites:
+    print(f"{frente.descripcion}:")
+    for sitio in frente.sitio_set.filter(activo=True):
+        print(f"  - {sitio.descripcion}")
+```
+
+### Contract Concepts Query
+
+```python
+from operaciones.models import ConceptoMaestro
+
+# Get ordinary concepts
+ordinarios = ConceptoMaestro.objects.filter(
+    partida_ordinaria__isnull=False,
+    activo=True
+).select_related('sub_anexo', 'unidad_medida')
+
+# Get PUEs (extraordinary)
+pues = ConceptoMaestro.objects.filter(
+    partida_extraordinaria__isnull=False,
+    activo=True
+).select_related('sub_anexo', 'unidad_medida')
+
+# Get concepts by sub-annex
+c1_concepts = ConceptoMaestro.objects.filter(
+    sub_anexo__clave_anexo='C-1',
+    activo=True
+)
+```
+
+### Site Assignments
+
+```python
+from operaciones.models import Sitio, Frente
+
+# Get all sites in a front
+sites = Sitio.objects.filter(
+    id_frente__descripcion='Golfo de México',
+    activo=True
+).select_related('id_frente')
+
+# Count sites per front
+from django.db.models import Count
+
+front_stats = Frente.objects.filter(
+    activo=True
+).annotate(
+    site_count=Count('sitio', filter=models.Q(sitio__activo=True))
+)
+
+for frente in front_stats:
+    print(f"{frente.descripcion}: {frente.site_count} sites")
+```
+
+## Database Schema
+
+### Core Catalog Tables
+
+```sql
+-- tipo
+CREATE TABLE tipo (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(200) NOT NULL,
+    nivel_afectacion INTEGER DEFAULT 0,
+    comentario TEXT,
+    activo BOOLEAN DEFAULT TRUE
+);
+
+-- cat_estatus
+CREATE TABLE cat_estatus (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(100) NOT NULL,
+    nivel_afectacion INTEGER DEFAULT 0,
+    comentario TEXT,
+    activo BOOLEAN DEFAULT TRUE
+);
+
+-- frente
+CREATE TABLE frente (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(200) NOT NULL,
+    nivel_afectacion INTEGER,
+    comentario TEXT,
+    activo BOOLEAN DEFAULT TRUE
+);
+
+-- sitio
+CREATE TABLE sitio (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(100) NOT NULL,
+    activo BOOLEAN DEFAULT TRUE,
+    id_frente_id INTEGER REFERENCES frente(id),
+    comentario TEXT
+);
+
+-- unidad_medida
+CREATE TABLE unidad_medida (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(50) NOT NULL,
+    clave VARCHAR(10) NOT NULL,
+    activo BOOLEAN DEFAULT TRUE,
+    comentario TEXT
+);
+```
+
+## API Endpoints
+
+See [Catalogs API Documentation](/api/catalogs) for endpoint details.
+
+## Related Models
+
+<CardGroup cols={3}>
+  <Card title="PTEHeader" icon="file-contract" href="/api/models/pte">
+    Uses Tipo, Estatus, Cliente
+  </Card>
+  
+  <Card title="OTE" icon="clipboard-list" href="/api/models/ote">
+    Uses Tipo, Estatus, Frente, Sitio
+  </Card>
+  
+  <Card title="Produccion" icon="chart-line" href="/api/models/production">
+    Uses Estatus, Sitio, UnidadMedida
+  </Card>
+</CardGroup>

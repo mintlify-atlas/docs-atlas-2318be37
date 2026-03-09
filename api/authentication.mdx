@@ -1,0 +1,248 @@
+---
+title: 'Authentication'
+description: 'Learn how to authenticate with the SASCOP BME SubTec API'
+icon: 'lock'
+---
+
+## Overview
+
+The SASCOP BME SubTec API uses **session-based authentication** with Django's built-in authentication system. All API endpoints require authentication via the `@login_required` decorator.
+
+## Authentication Method
+
+The API uses Django session authentication, which requires:
+
+1. User login through the web interface
+2. Session cookie maintained in subsequent requests
+3. CSRF token for POST/PUT/DELETE operations
+
+## Login Endpoint
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.sascop-bme-subtec.com/accounts/login/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "your_username",
+    "password": "your_password"
+  }' \
+  -c cookies.txt
+```
+
+```python Python
+import requests
+
+session = requests.Session()
+
+login_url = "https://api.sascop-bme-subtec.com/accounts/login/"
+login_data = {
+    "username": "your_username",
+    "password": "your_password"
+}
+
+response = session.post(login_url, data=login_data)
+
+if response.status_code == 200:
+    print("Authenticated successfully")
+```
+
+```javascript JavaScript
+const session = axios.create({
+  baseURL: 'https://api.sascop-bme-subtec.com',
+  withCredentials: true
+});
+
+const login = async () => {
+  const response = await session.post('/accounts/login/', {
+    username: 'your_username',
+    password: 'your_password'
+  });
+  return response.data;
+};
+```
+</CodeGroup>
+
+## Session Configuration
+
+From `bme_subtec/settings.py`:
+
+```python
+SESSION_COOKIE_AGE = 7200  # 2 hours
+SESSION_SAVE_EVERY_REQUEST = True
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+```
+
+<ParamField path="SESSION_COOKIE_AGE" type="integer">
+  Session duration in seconds (7200 = 2 hours)
+</ParamField>
+
+<ParamField path="SESSION_SAVE_EVERY_REQUEST" type="boolean">
+  Extends session on each request
+</ParamField>
+
+## CSRF Protection
+
+All POST, PUT, and DELETE requests require a valid CSRF token:
+
+<CodeGroup>
+```python Python with CSRF
+import requests
+
+session = requests.Session()
+
+# Get CSRF token from login page
+login_page = session.get('https://api.sascop-bme-subtec.com/accounts/login/')
+csrf_token = session.cookies['csrftoken']
+
+# Include CSRF token in POST requests
+headers = {'X-CSRFToken': csrf_token}
+data = {'key': 'value'}
+
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/api/ptes/',
+    headers=headers,
+    json=data
+)
+```
+
+```javascript JavaScript with CSRF
+// Get CSRF token from cookie
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+}
+
+const csrftoken = getCookie('csrftoken');
+
+// Include in request headers
+axios.post('/operaciones/api/ptes/', data, {
+  headers: {
+    'X-CSRFToken': csrftoken
+  }
+});
+```
+</CodeGroup>
+
+## Trusted Origins
+
+The API accepts requests from these origins:
+
+```python settings.py
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost',
+    'http://127.0.0.1',
+    'http://0.0.0.0',
+    'http://54.227.40.69',  # Production server
+]
+```
+
+## Authentication Check
+
+All API endpoints use the `@login_required` decorator:
+
+```python api.py
+from django.contrib.auth.decorators import login_required
+
+@login_required(login_url='/accounts/login/')
+def api_estadisticas(request):
+    """API para estadísticas del dashboard"""
+    # Endpoint logic
+    return JsonResponse(data)
+```
+
+## Error Responses
+
+<ResponseExample>
+```json 401 Unauthorized
+{
+  "error": "Authentication required",
+  "redirect": "/accounts/login/"
+}
+```
+
+```json 403 Forbidden - CSRF
+{
+  "error": "CSRF verification failed",
+  "detail": "CSRF token missing or incorrect"
+}
+```
+</ResponseExample>
+
+## Session Timeout
+
+The API implements custom session timeout middleware:
+
+```python middleware.py
+class SessionTimeoutMiddleware:
+    """
+    Automatically logs out users after 2 hours of inactivity
+    """
+```
+
+<Warning>
+  Sessions expire after **2 hours** (7200 seconds) of the last request.
+  Make sure to handle session expiration in your client application.
+</Warning>
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use HTTPS" icon="shield-halved">
+    Always use HTTPS in production to protect credentials
+  </Card>
+  
+  <Card title="Store Sessions Securely" icon="database">
+    Never expose session cookies in client-side JavaScript
+  </Card>
+  
+  <Card title="Validate CSRF" icon="check-circle">
+    Always include CSRF tokens in state-changing requests
+  </Card>
+  
+  <Card title="Handle Expiration" icon="clock">
+    Implement proper session expiration handling
+  </Card>
+</CardGroup>
+
+## Complete Authentication Example
+
+```python
+import requests
+
+class SascopAPIClient:
+    def __init__(self, base_url):
+        self.base_url = base_url
+        self.session = requests.Session()
+        
+    def login(self, username, password):
+        """Authenticate with the API"""
+        login_url = f"{self.base_url}/accounts/login/"
+        response = self.session.post(login_url, data={
+            'username': username,
+            'password': password
+        })
+        
+        if response.status_code == 200:
+            self.csrf_token = self.session.cookies.get('csrftoken')
+            return True
+        return False
+    
+    def get(self, endpoint):
+        """Make authenticated GET request"""
+        url = f"{self.base_url}{endpoint}"
+        return self.session.get(url)
+    
+    def post(self, endpoint, data):
+        """Make authenticated POST request with CSRF"""
+        url = f"{self.base_url}{endpoint}"
+        headers = {'X-CSRFToken': self.csrf_token}
+        return self.session.post(url, json=data, headers=headers)
+
+# Usage
+client = SascopAPIClient('https://api.sascop-bme-subtec.com')
+client.login('username', 'password')
+
+response = client.get('/operaciones/api/estadisticas/')
+print(response.json())
+```

@@ -1,0 +1,505 @@
+---
+title: 'OTE Models'
+description: 'Data models for Work Orders (OTEs)'
+icon: 'database'
+---
+
+## Overview
+
+OTE (Orden de Trabajo de Ejecución) models manage work orders, including their execution tracking, annexes, schedules, and site assignments.
+
+## OTE
+
+Main model for Work Orders.
+
+**Source:** `operaciones/models/ote_models.py:5-93`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="id_tipo" type="ForeignKey" required>
+  Reference to Tipo model (nivel_afectacion: 2)
+</ParamField>
+
+<ParamField path="id_pte_header" type="ForeignKey">
+  Optional reference to parent PTEHeader
+</ParamField>
+
+<ParamField path="orden_trabajo" type="string" required>
+  Work order number (max 100 chars)
+</ParamField>
+
+<ParamField path="descripcion_trabajo" type="text" required>
+  Detailed work description
+</ParamField>
+
+<ParamField path="id_responsable_proyecto" type="ForeignKey" required>
+  Reference to ResponsableProyecto
+</ParamField>
+
+<ParamField path="responsable_cliente" type="string" required>
+  Client's responsible person (max 200 chars)
+</ParamField>
+
+<ParamField path="oficio_ot" type="string" required>
+  Official OT document number (max 100 chars)
+</ParamField>
+
+<ParamField path="id_estatus_ot" type="ForeignKey" required>
+  Reference to Estatus (nivel_afectacion: 2)
+</ParamField>
+
+<ParamField path="fecha_inicio_programado" type="date">
+  Scheduled start date
+</ParamField>
+
+<ParamField path="fecha_inicio_real" type="date">
+  Actual start date
+</ParamField>
+
+<ParamField path="fecha_termino_programado" type="date">
+  Scheduled completion date
+</ParamField>
+
+<ParamField path="fecha_termino_real" type="date">
+  Actual completion date
+</ParamField>
+
+<ParamField path="estatus" type="integer" default="1">
+  General status (1=Active, -1=Inactive)
+</ParamField>
+
+<ParamField path="num_reprogramacion" type="integer">
+  Reprogramming sequence number
+</ParamField>
+
+<ParamField path="ot_principal" type="integer">
+  ID of parent OT if this is a reprogramming
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional comments
+</ParamField>
+
+<ParamField path="monto_mxn" type="decimal" default="0">
+  Amount in MXN (25 digits, 2 decimals)
+</ParamField>
+
+<ParamField path="monto_usd" type="decimal" default="0">
+  Amount in USD (25 digits, 2 decimals)
+</ParamField>
+
+<ParamField path="id_frente" type="ForeignKey">
+  Reference to Frente (work front)
+</ParamField>
+
+<ParamField path="id_embarcacion" type="integer">
+  Reference to vessel site
+</ParamField>
+
+<ParamField path="id_plataforma" type="integer">
+  Reference to platform site
+</ParamField>
+
+<ParamField path="id_intercom" type="integer">
+  Reference to intercom site
+</ParamField>
+
+<ParamField path="id_patio" type="integer">
+  Reference to yard site
+</ParamField>
+
+<ParamField path="plazo_dias" type="integer">
+  Deadline in days
+</ParamField>
+
+<ParamField path="id_cliente" type="ForeignKey">
+  Reference to Cliente
+</ParamField>
+
+<ParamField path="requiere_patio" type="boolean" default="false">
+  Whether yard phase is required
+</ParamField>
+
+<ParamField path="fecha_inicio_patio" type="date">
+  Yard phase start date
+</ParamField>
+
+<ParamField path="fecha_fin_patio" type="date">
+  Yard phase end date
+</ParamField>
+
+### Model Definition
+
+```python
+class OTE(models.Model): 
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                limit_choices_to={'nivel_afectacion': 2})
+    id_pte_header = models.ForeignKey(PTEHeader, on_delete=models.CASCADE, 
+                                     null=True, blank=True)
+    orden_trabajo = models.CharField(max_length=100)
+    descripcion_trabajo = models.TextField()
+    id_responsable_proyecto = models.ForeignKey(ResponsableProyecto, 
+                                                on_delete=models.CASCADE)
+    responsable_cliente = models.CharField(max_length=200)
+    oficio_ot = models.CharField(max_length=100)
+    id_estatus_ot = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                      limit_choices_to={'nivel_afectacion': 2})
+    fecha_inicio_programado = models.DateField(blank=True, null=True)
+    fecha_inicio_real = models.DateField(blank=True, null=True)
+    fecha_termino_programado = models.DateField(blank=True, null=True)
+    fecha_termino_real = models.DateField(blank=True, null=True)
+    estatus = models.IntegerField(default=1)
+    num_reprogramacion = models.IntegerField(null=True, blank=True)
+    ot_principal = models.IntegerField(null=True, blank=True)
+    comentario = models.TextField(blank=True) 
+    monto_mxn = models.DecimalField(decimal_places=2, max_digits=25, 
+                                    null=True, blank=True, default=0)
+    monto_usd = models.DecimalField(decimal_places=2, max_digits=25, 
+                                    null=True, blank=True, default=0)
+    id_frente = models.ForeignKey(Frente, on_delete=models.SET_NULL, 
+                                  null=True, blank=True)
+    id_embarcacion = models.IntegerField(null=True, blank=True)
+    id_plataforma = models.IntegerField(null=True, blank=True)
+    id_intercom = models.IntegerField(null=True, blank=True)
+    id_patio = models.IntegerField(null=True, blank=True)
+    plazo_dias = models.IntegerField(null=True, blank=True)
+    id_cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, 
+                                   null=True, blank=True)
+    requiere_patio = models.BooleanField(default=False)
+    fecha_inicio_patio = models.DateField(blank=True, null=True)
+    fecha_fin_patio = models.DateField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'ot'
+```
+
+### Class Methods
+
+```python
+@classmethod
+def con_sitios(cls, **filters):
+    """
+    Efficiently loads OTEs with their associated site objects.
+    Returns OTEs with embarcacion_obj, plataforma_obj, intercom_obj, patio_obj.
+    """
+    ots = list(cls.objects.filter(**filters))
+    
+    if not ots:
+        return ots
+        
+    sitio_ids = set()
+    for ot in ots:
+        if ot.id_embarcacion: sitio_ids.add(ot.id_embarcacion)
+        if ot.id_plataforma: sitio_ids.add(ot.id_plataforma)
+        if ot.id_intercom: sitio_ids.add(ot.id_intercom)
+        if ot.id_patio: sitio_ids.add(ot.id_patio)
+    
+    sitios_dict = {}
+    if sitio_ids:
+        sitios_dict = {sitio.id: sitio 
+                      for sitio in Sitio.objects.filter(id__in=sitio_ids)}
+    
+    for ot in ots:
+        ot.embarcacion_obj = sitios_dict.get(ot.id_embarcacion)
+        ot.plataforma_obj = sitios_dict.get(ot.id_plataforma) 
+        ot.intercom_obj = sitios_dict.get(ot.id_intercom)
+        ot.patio_obj = sitios_dict.get(ot.id_patio)
+
+    return ots
+```
+
+### Properties
+
+```python
+@property
+def tiene_reprogramaciones(self):
+    """Returns True if this OT has associated reprogramming OTs"""
+    if self.id_tipo_id != 4:  # Only for initial OTs
+        return False
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).exists()
+
+@property
+def count_reprogramaciones(self):
+    """Returns the number of associated reprogramming OTs"""
+    if self.id_tipo_id != 4:
+        return 0
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).count()
+```
+
+### Example Usage
+
+```python
+from operaciones.models import OTE
+
+# Create new OT
+ot = OTE.objects.create(
+    id_tipo_id=4,  # Initial OT
+    orden_trabajo="OT-2024-001",
+    descripcion_trabajo="Instalación de tubos conductores",
+    id_responsable_proyecto_id=1,
+    responsable_cliente="Ing. Carlos López",
+    oficio_ot="OF-2024-001",
+    id_estatus_ot_id=1,
+    id_frente_id=2,
+    id_plataforma=5,
+    plazo_dias=60
+)
+
+# Query OTs with sites efficiently
+ots = OTE.con_sitios(id_frente=2, estatus=1)
+for ot in ots:
+    if ot.plataforma_obj:
+        print(f"{ot.orden_trabajo} - {ot.plataforma_obj.descripcion}")
+
+# Check for reprogramming
+if ot.tiene_reprogramaciones:
+    print(f"This OT has {ot.count_reprogramaciones} reprogramming(s)")
+
+# Create reprogramming OT
+reprog = OTE.objects.create(
+    id_tipo_id=5,  # Reprogramming
+    ot_principal=ot.id,
+    num_reprogramacion=1,
+    orden_trabajo=f"{ot.orden_trabajo}-R1",
+    # ... other fields ...
+)
+```
+
+## OTDetalle
+
+Tracks individual steps within an OT.
+
+**Source:** `operaciones/models/ote_models.py:111-126`
+
+### Model Definition
+
+```python
+class OTDetalle(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, 
+                              related_name='detalles')
+    estatus_paso = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                     limit_choices_to={'nivel_afectacion': 4})
+    id_paso = models.ForeignKey(PasoOt, on_delete=models.CASCADE)
+    fecha_entrega = models.DateField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    comentario = models.TextField(blank=True, null=True)
+    archivo = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'ot_detalle'
+        ordering = ['id_paso__id']
+```
+
+## PasoOt
+
+Defines steps that can be used in OTEs.
+
+**Source:** `operaciones/models/ote_models.py:95-109`
+
+### Model Definition
+
+```python
+class PasoOt(models.Model):
+    descripcion = models.CharField(max_length=200)
+    orden = models.CharField(blank=True, null=True, max_length=10)
+    activo = models.BooleanField(default=True)
+    importancia = models.FloatField(default=0, blank=True, null=True)
+    tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                            blank=True, null=True, default=1, 
+                            related_name='tipos_ot')
+    comentario = models.TextField(blank=True, null=True)
+    id_tipo_cliente = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                        null=True, blank=True, 
+                                        related_name='tipo_cliente')
+
+    class Meta:
+        db_table = 'paso_ot'
+        ordering = ['orden']
+```
+
+## ImportacionAnexo
+
+Tracks Excel imports of Anexo C (production items).
+
+**Source:** `operaciones/models/ote_models.py:135-151`
+
+### Model Definition
+
+```python
+class ImportacionAnexo(models.Model):
+    ot = models.ForeignKey(OTE, on_delete=models.CASCADE, 
+                          related_name='importaciones_anexo')
+    archivo_excel = models.FileField(upload_to=generar_ruta_anexo)
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    usuario_carga = models.ForeignKey('auth.User', on_delete=models.SET_NULL, 
+                                     null=True)
+    total_registros = models.IntegerField(default=0)
+    es_activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'importacion_anexo'
+        ordering = ['id']
+```
+
+### Example Usage
+
+```python
+from operaciones.models import ImportacionAnexo
+
+# Create import record
+importacion = ImportacionAnexo.objects.create(
+    ot_id=1,
+    archivo_excel=uploaded_file,
+    usuario_carga=request.user,
+    total_registros=150,
+    es_activo=True
+)
+
+# Get active imports for OT
+imports = ImportacionAnexo.objects.filter(
+    ot_id=1,
+    es_activo=True
+).order_by('-fecha_carga')
+```
+
+## PartidaAnexoImportada
+
+Individual line items from imported Anexo C.
+
+**Source:** `operaciones/models/ote_models.py:153-172`
+
+### Model Definition
+
+```python
+class PartidaAnexoImportada(models.Model):
+    importacion_anexo = models.ForeignKey(ImportacionAnexo, 
+                                         on_delete=models.CASCADE, 
+                                         related_name='partidas')
+    id_partida = models.CharField(max_length=10)
+    descripcion_concepto = models.TextField()
+    anexo = models.CharField(max_length=10, null=True, blank=True)
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE)
+    volumen_proyectado = models.DecimalField(max_digits=18, decimal_places=6)
+    precio_unitario_mn = models.DecimalField(max_digits=15, decimal_places=4)
+    precio_unitario_usd = models.DecimalField(max_digits=15, decimal_places=4)
+    orden_fila = models.IntegerField()
+    
+    class Meta:
+        db_table = 'partida_anexo_importada'
+        ordering = ['id']
+```
+
+### Example Usage
+
+```python
+# Get partidas from an import
+partidas = PartidaAnexoImportada.objects.filter(
+    importacion_anexo_id=1
+).select_related('unidad_medida').order_by('orden_fila')
+
+for partida in partidas:
+    print(f"{partida.id_partida}: {partida.descripcion_concepto}")
+    print(f"  Volume: {partida.volumen_proyectado} {partida.unidad_medida.clave}")
+    print(f"  Price: ${partida.precio_unitario_usd}")
+```
+
+## PartidaProyectada
+
+Daily projected volumes from MS Project import.
+
+**Source:** `operaciones/models/ote_models.py:174-189`
+
+### Model Definition
+
+```python
+class PartidaProyectada(models.Model):
+    ot = models.ForeignKey('OTE', on_delete=models.CASCADE, 
+                          null=True, blank=True)
+    partida_anexo = models.ForeignKey('PartidaAnexoImportada', 
+                                     on_delete=models.CASCADE, 
+                                     related_name='programacion_diaria', 
+                                     null=True, blank=True)
+    fecha = models.DateField(null=True, blank=True)
+    volumen_programado = models.DecimalField(max_digits=15, decimal_places=6, 
+                                            default=0, null=True, blank=True)
+    
+    class Meta:
+        db_table = 'partida_proyectada'
+```
+
+## Database Schema
+
+### ot Table
+
+```sql
+CREATE TABLE ot (
+    id SERIAL PRIMARY KEY,
+    id_tipo_id INTEGER NOT NULL REFERENCES tipo(id),
+    id_pte_header_id INTEGER REFERENCES pte_header(id),
+    orden_trabajo VARCHAR(100) NOT NULL,
+    descripcion_trabajo TEXT NOT NULL,
+    id_responsable_proyecto_id INTEGER NOT NULL REFERENCES responsable_proyecto(id),
+    responsable_cliente VARCHAR(200) NOT NULL,
+    oficio_ot VARCHAR(100) NOT NULL,
+    id_estatus_ot_id INTEGER NOT NULL REFERENCES cat_estatus(id),
+    fecha_inicio_programado DATE,
+    fecha_inicio_real DATE,
+    fecha_termino_programado DATE,
+    fecha_termino_real DATE,
+    estatus INTEGER DEFAULT 1,
+    num_reprogramacion INTEGER,
+    ot_principal INTEGER,
+    comentario TEXT,
+    monto_mxn DECIMAL(25, 2) DEFAULT 0,
+    monto_usd DECIMAL(25, 2) DEFAULT 0,
+    id_frente_id INTEGER REFERENCES frente(id),
+    id_embarcacion INTEGER,
+    id_plataforma INTEGER,
+    id_intercom INTEGER,
+    id_patio INTEGER,
+    plazo_dias INTEGER,
+    id_cliente_id INTEGER REFERENCES cliente(id),
+    requiere_patio BOOLEAN DEFAULT FALSE,
+    fecha_inicio_patio DATE,
+    fecha_fin_patio DATE
+);
+
+CREATE INDEX idx_ot_tipo ON ot(id_tipo_id);
+CREATE INDEX idx_ot_frente ON ot(id_frente_id);
+CREATE INDEX idx_ot_principal ON ot(ot_principal);
+```
+
+## API Endpoints
+
+See [OTE API Documentation](/api/ote) for endpoint details.
+
+## Related Models
+
+<CardGroup cols={3}>
+  <Card title="PTEHeader" icon="file-contract" href="/api/models/pte#pteheader">
+    Parent PTE projects
+  </Card>
+  
+  <Card title="Produccion" icon="chart-line" href="/api/models/production#produccion">
+    Production records
+  </Card>
+  
+  <Card title="Sitio" icon="location-dot" href="/api/models/catalogs#sitio">
+    Work sites
+  </Card>
+</CardGroup>

@@ -1,0 +1,521 @@
+---
+title: Static Files
+description: Managing and serving static files in SASCOP BME SubTec
+---
+
+## Overview
+
+SASCOP BME SubTec uses **WhiteNoise** to serve static files efficiently in production without requiring a separate web server like Nginx or Apache. This simplifies deployment while maintaining excellent performance.
+
+## Static Files Configuration
+
+The static files configuration is defined in `bme_subtec/settings.py:129-131`:
+
+```python bme_subtec/settings.py
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'operaciones' / 'static',]
+```
+
+### Configuration Variables
+
+| Setting | Value | Purpose |
+|---------|-------|----------|
+| `STATIC_URL` | `/static/` | URL prefix for static files |
+| `STATIC_ROOT` | `BASE_DIR / 'staticfiles'` | Directory where collected files are stored |
+| `STATICFILES_DIRS` | `[BASE_DIR / 'operaciones' / 'static']` | Directories to search for static files |
+
+## WhiteNoise Integration
+
+WhiteNoise is integrated into the middleware stack (`bme_subtec/settings.py:49-59`):
+
+```python bme_subtec/settings.py
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Must be here!
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    # ...
+]
+```
+
+<Note>
+WhiteNoise middleware must be placed directly after `SecurityMiddleware` and before all other middleware.
+</Note>
+
+**Package Version:**
+
+```txt requirements.txt
+whitenoise==6.4.0
+```
+
+## Project Structure
+
+Static files are organized per Django app:
+
+```
+operaciones/
+└── static/
+    └── operaciones/
+        ├── css/
+        │   ├── styles.css
+        │   └── dashboard.css
+        ├── js/
+        │   ├── main.js
+        │   └── charts.js
+        └── images/
+            ├── logo_black_white_subtec.jpg
+            └── SASCOP_LOGO.png
+```
+
+## Collecting Static Files
+
+Before deployment, collect all static files from all apps into `STATIC_ROOT`:
+
+<Steps>
+  <Step title="Run collectstatic Command">
+    ```bash
+    python manage.py collectstatic
+    ```
+    
+    You'll be prompted to confirm:
+    ```
+    You have requested to collect static files at the destination
+    location as specified in your settings.
+    
+    This will overwrite existing files!
+    Are you sure you want to do this?
+    
+    Type 'yes' to continue, or 'no' to cancel:
+    ```
+  </Step>
+
+  <Step title="Non-Interactive Mode">
+    For automated deployments, use `--noinput`:
+    
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+  </Step>
+
+  <Step title="Clear Existing Files">
+    To remove old files before collecting:
+    
+    ```bash
+    python manage.py collectstatic --noinput --clear
+    ```
+  </Step>
+</Steps>
+
+**What Gets Collected:**
+
+- Files from `STATICFILES_DIRS`
+- Static files from installed apps
+- Admin static files (from Django)
+- All collected into `STATIC_ROOT`
+
+## Using Static Files in Templates
+
+### Load Static Template Tag
+
+```django
+{% load static %}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="{% static 'operaciones/css/styles.css' %}">
+</head>
+<body>
+    <img src="{% static 'operaciones/images/SASCOP_LOGO.png' %}" alt="SASCOP Logo">
+    <script src="{% static 'operaciones/js/main.js' %}"></script>
+</body>
+</html>
+```
+
+### Accessing from Python
+
+In views or utility functions, use `settings.BASE_DIR`:
+
+```python
+import os
+from django.conf import settings
+
+# Logo path in utils.py
+ruta_logo = os.path.join(
+    settings.BASE_DIR,
+    'operaciones',
+    'static',
+    'operaciones',
+    'images',
+    'logo_black_white_subtec.jpg'
+)
+
+if os.path.exists(ruta_logo):
+    with open(ruta_logo, 'rb') as f:
+        # Use the file
+        pass
+```
+
+**Example from `core/utils.py:252-270`:**
+
+```python core/utils.py
+ruta_logo_bme = os.path.join(
+    settings.BASE_DIR,
+    'operaciones',
+    'static',
+    'operaciones',
+    'images',
+    'logo_black_white_subtec.jpg'
+)
+
+if os.path.exists(ruta_logo_bme):
+    with open(ruta_logo_bme, 'rb') as f:
+        img1 = MIMEImage(f.read())
+        img1.add_header('Content-ID', '<logo_bme>')
+        img1.add_header(
+            'Content-Disposition',
+            'inline',
+            filename='logo_black_white_subtec.jpg'
+        )
+        email.attach(img1)
+```
+
+## WhiteNoise Advanced Features
+
+### Compression and Caching
+
+Enable compressed static file serving with cache-friendly names:
+
+```python bme_subtec/settings.py
+# Currently commented out
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+
+Uncomment to enable:
+
+```python bme_subtec/settings.py
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+
+**Benefits:**
+
+- **Compression**: Serves gzip/brotli compressed files
+- **Cache busting**: Adds hash to filenames (`styles.abc123.css`)
+- **Far-future expiry**: Sets long cache headers
+- **CDN-ready**: Perfect for CloudFront/CDN distribution
+
+<Warning>
+When enabling `CompressedManifestStaticFilesStorage`, you must run `collectstatic` whenever static files change. Missing files will cause errors.
+</Warning>
+
+### Compression Configuration
+
+```python bme_subtec/settings.py
+# Customize compression
+WHITENOISE_COMPRESS_OFFLINE = True
+WHITENOISE_COMPRESS_OFFLINE_MANIFEST = 'staticfiles.json'
+```
+
+### Custom Headers
+
+```python bme_subtec/settings.py
+# Set custom HTTP headers
+WHITENOISE_ADD_HEADERS = {
+    # Cache static files for 1 year
+    '*': {
+        'Cache-Control': 'public, max-age=31536000',
+    },
+    # Don't cache HTML files
+    '*.html': {
+        'Cache-Control': 'public, max-age=0',
+    },
+}
+```
+
+## Development vs Production
+
+### Development
+
+During development with `DEBUG=True`, Django automatically serves static files:
+
+```python
+# No collectstatic needed in development
+python manage.py runserver
+```
+
+Files are served directly from:
+- `operaciones/static/`
+- Django admin static files
+
+### Production
+
+In production with `DEBUG=False`, you must collect static files:
+
+```bash
+# Collect static files
+python manage.py collectstatic --noinput
+
+# Start production server
+gunicorn bme_subtec.wsgi:application
+```
+
+WhiteNoise serves files from `STATIC_ROOT` (`staticfiles/` directory).
+
+## CDN Integration
+
+For improved performance, serve static files from a CDN:
+
+<Steps>
+  <Step title="Configure CDN">
+    Set up CloudFront, Cloudflare, or another CDN pointing to your domain's `/static/` path.
+  </Step>
+
+  <Step title="Update STATIC_URL">
+    ```python bme_subtec/settings.py
+    # Use CDN URL
+    STATIC_URL = 'https://cdn.yourdomain.com/static/'
+    
+    # Or use environment variable
+    STATIC_URL = os.getenv('STATIC_URL', '/static/')
+    ```
+  </Step>
+
+  <Step title="Collect and Upload">
+    ```bash
+    # Collect static files
+    python manage.py collectstatic --noinput
+    
+    # Upload to CDN (example with AWS S3)
+    aws s3 sync staticfiles/ s3://your-bucket/static/ --acl public-read
+    ```
+  </Step>
+</Steps>
+
+### Using django-storages with S3
+
+For automatic S3/CDN integration:
+
+```bash
+pip install django-storages boto3
+```
+
+```python bme_subtec/settings.py
+if not DEBUG:
+    # AWS S3 Settings
+    AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+    AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+    AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
+    AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
+    AWS_S3_OBJECT_PARAMETERS = {
+        'CacheControl': 'max-age=86400',
+    }
+    AWS_LOCATION = 'static'
+
+    STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    STATIC_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/'
+```
+
+## Media Files
+
+Media files (user uploads) are handled separately from static files:
+
+```python bme_subtec/settings.py
+# Add media file configuration
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+```
+
+### File Upload Locations
+
+From `operaciones/models/catalogos_models.py:160`:
+
+```python
+archivo = models.FileField(upload_to='contratos/anexos_maestros/', null=True, blank=True)
+```
+
+Uploaded files go to: `media/contratos/anexos_maestros/`
+
+### Serving Media in Development
+
+```python bme_subtec/urls.py
+from django.conf import settings
+from django.conf.urls.static import static
+
+urlpatterns = [
+    # ... your URL patterns ...
+]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+```
+
+### Serving Media in Production
+
+<Note>
+WhiteNoise does **not** serve media files. Use:
+- Nginx/Apache for media files
+- Cloud storage (S3, Google Cloud Storage)
+- CDN
+</Note>
+
+**Example Nginx configuration:**
+
+```nginx
+location /media/ {
+    alias /path/to/sascop/media/;
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+}
+```
+
+## Static File Finder
+
+Django uses multiple finders to locate static files:
+
+```python bme_subtec/settings.py
+STATICFILES_FINDERS = [
+    'django.contrib.staticfiles.finders.FileSystemFinder',
+    'django.contrib.staticfiles.finders.AppDirectoriesFinder',
+]
+```
+
+- `FileSystemFinder`: Searches `STATICFILES_DIRS`
+- `AppDirectoriesFinder`: Searches `static/` in each installed app
+
+## Troubleshooting
+
+### Static Files Not Loading
+
+<Steps>
+  <Step title="Verify DEBUG Setting">
+    ```python
+    # In production, DEBUG must be False
+    DEBUG = False
+    ```
+  </Step>
+
+  <Step title="Run collectstatic">
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+  </Step>
+
+  <Step title="Check STATIC_ROOT Exists">
+    ```bash
+    ls -la staticfiles/
+    ```
+    
+    Should contain collected files.
+  </Step>
+
+  <Step title="Verify WhiteNoise Middleware">
+    Ensure it's in `MIDDLEWARE` after `SecurityMiddleware`.
+  </Step>
+</Steps>
+
+### 404 on Static Files
+
+```bash
+# Check collected files
+python manage.py collectstatic --noinput
+
+# Verify file exists
+ls staticfiles/operaciones/css/styles.css
+
+# Check template tag usage
+{% load static %}
+{% static 'operaciones/css/styles.css' %}
+```
+
+### Outdated Static Files
+
+```bash
+# Clear and recollect
+python manage.py collectstatic --noinput --clear
+
+# Or enable CompressedManifestStaticFilesStorage for cache busting
+```
+
+### Permission Errors
+
+```bash
+# Ensure staticfiles directory is writable
+chmod -R 755 staticfiles/
+
+# Or set proper ownership
+chown -R www-data:www-data staticfiles/
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Version Your Static Files">
+    Use `CompressedManifestStaticFilesStorage` to automatically version files:
+    ```python
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    ```
+  </Step>
+
+  <Step title="Minimize File Size">
+    - Minify CSS and JavaScript
+    - Optimize images
+    - Use SVG when possible
+    - Enable gzip/brotli compression
+  </Step>
+
+  <Step title="Use CDN for Large Files">
+    Serve large files from CDN:
+    - Videos
+    - Large images
+    - PDF documents
+  </Step>
+
+  <Step title="Set Proper Cache Headers">
+    ```python
+    WHITENOISE_MAX_AGE = 31536000  # 1 year
+    ```
+  </Step>
+
+  <Step title="Organize Static Files">
+    Keep files organized by type:
+    ```
+    static/operaciones/
+    ├── css/
+    ├── js/
+    ├── images/
+    ├── fonts/
+    └── vendor/  # Third-party libraries
+    ```
+  </Step>
+</Steps>
+
+## Performance Monitoring
+
+Monitor static file performance:
+
+```python
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Log static file requests
+logger.info(f"Static file requested: {request.path}")
+```
+
+Check server logs for:
+- 404 errors on static files
+- Slow static file responses
+- Cache hit/miss ratios
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Overview" icon="rocket" href="/development/deployment/overview">
+    Complete deployment guide
+  </Card>
+  
+  <Card title="Environment Variables" icon="key" href="/development/deployment/environment-variables">
+    Configure environment settings
+  </Card>
+</CardGroup>

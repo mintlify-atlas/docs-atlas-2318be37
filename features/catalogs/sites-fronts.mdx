@@ -1,0 +1,547 @@
+---
+title: 'Sites & Fronts Configuration'
+description: 'Configure work locations, operational fronts, and site hierarchies'
+icon: 'location-dot'
+---
+
+## Overview
+
+The Sites & Fronts catalog manages the geographic and operational structure of work locations. This hierarchical system organizes sites by operational fronts (patios, vessels, platforms).
+
+## Data Models
+
+### Frente (Front)
+
+Operational fronts represent major work area categories:
+
+```python operaciones/models/catalogos_models.py
+class Frente(models.Model):
+    descripcion = models.CharField(max_length=200)
+    nivel_afectacion = models.IntegerField(blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'frente'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+### Sitio (Site)
+
+Sites are specific work locations linked to a front:
+
+```python operaciones/models/catalogos_models.py
+class Sitio(models.Model):
+    descripcion = models.CharField(max_length=100)
+    activo = models.BooleanField(default=True)
+    id_frente = models.ForeignKey(Frente, on_delete=models.CASCADE, blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'sitio'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+## Front Types
+
+Fronts use `nivel_afectacion` to categorize their scope:
+
+<Tabs>
+  <Tab title="Sitios (1)">
+    Fronts that affect site-level operations (e.g., Patio, Vessel, Platform)
+  </Tab>
+  <Tab title="OTs (2)">
+    Fronts that affect work order level operations
+  </Tab>
+</Tabs>
+
+## Front Management
+
+### Listing Fronts
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_frentes(request):
+    """Lista de todas los estados de cobro"""
+    return render(request, 'operaciones/catalogos/frentes/lista_frentes.html')
+```
+
+### DataTable API
+
+```python operaciones/views/catalogos.py
+def datatable_frentes(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    tipos = Frente.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+        nivel_texto=Case(
+            When(nivel_afectacion=1, then=Value('Sitios')),
+            When(nivel_afectacion=2, then=Value('OTs')),
+            default=Value('No definido'),
+            output_field=CharField()
+        )
+    ).order_by('id')
+    
+    if search_value:
+        tipos = tipos.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value)
+        )
+    
+    total_records = tipos.count()
+    tipos = tipos[start:start + length]
+    
+    data = []
+    for tipo in tipos:
+        data.append({
+            'id': tipo.id,
+            'descripcion': tipo.descripcion,
+            'activo': tipo.estado_texto,
+            'activo_bool': tipo.activo,
+            'nivel_afectacion': tipo.nivel_texto,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+### Creating Fronts
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_frente(request):
+    try:
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        activo = True
+        
+        frente = Frente.objects.create(
+            descripcion=descripcion,
+            nivel_afectacion=afectacion,
+            comentario=comentario,
+            activo=activo
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Frente creado correctamente',
+            'id': frente.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear frente: {str(e)}'
+        })
+```
+
+### Updating Fronts
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def editar_frente(request):
+    try:
+        id = request.POST.get('id')
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        
+        frente = Frente.objects.get(id=id)
+        frente.descripcion = descripcion
+        frente.nivel_afectacion = afectacion
+        frente.comentario = comentario
+        frente.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Frente actualizada correctamente',
+            'exito': True
+        })
+    except Frente.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Frente no encontrada',
+            'exito': False
+        })
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al actualizar el frente: {str(e)}',
+            'exito': False
+        })
+```
+
+### Deleting (Deactivating) Fronts
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def eliminar_frente(request):
+    try:
+        id = request.POST.get('id')
+        
+        if not id:
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'ID de frente no proporcionado',
+                'exito': False
+            })
+
+        frente = Frente.objects.get(id=id)
+        frente.activo = False
+        frente.save()
+
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Frente desactivado correctamente',
+            'exito': True
+        })
+
+    except Frente.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Frente no encontrado',
+            'exito': False
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al desactivar frente: {str(e)}',
+            'exito': False
+        })
+```
+
+## Site Management
+
+### Listing Sites
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_sitios(request):
+    """Lista de todas los sitios"""
+    frentes = Frente.objects.filter(activo=True, nivel_afectacion=1)
+    return render(request, 'operaciones/catalogos/sitios/lista_sitios.html', {'frentes': frentes})
+```
+
+<Info>
+  The view preloads active fronts with `nivel_afectacion=1` for the dropdown selector.
+</Info>
+
+### DataTable API for Sites
+
+```python operaciones/views/catalogos.py
+def datatable_sitios(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    sitios = Sitio.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+        frente_descripcion=F('id_frente__descripcion')
+    ).order_by('id')
+    
+    if search_value:
+        sitios = sitios.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value)
+        )
+    
+    total_records = sitios.count()
+    sitios = sitios[start:start + length]
+    
+    data = []
+    for sitio in sitios:
+        data.append({
+            'id': sitio.id,
+            'descripcion': sitio.descripcion,
+            'activo': sitio.estado_texto,
+            'activo_bool': sitio.activo,
+            'frente': sitio.frente_descripcion,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+<Tip>
+  **Query Optimization**: Uses `F()` expression to fetch related front description in a single query.
+</Tip>
+
+### Creating Sites
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_sitio(request):
+    try:
+        descripcion = request.POST.get('descripcion')
+        comentario = request.POST.get('comentario', '')
+        id_frente = request.POST.get('id_frente')
+        activo = True
+        
+        sitio = Sitio.objects.create(
+            descripcion=descripcion,
+            comentario=comentario,
+            id_frente_id=id_frente,
+            activo=activo
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio creada correctamente',
+            'id': sitio.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear sitio: {str(e)}'
+        })
+```
+
+### Updating Sites
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def editar_sitio(request):
+    try:
+        sitio_id = request.POST.get('id')
+        descripcion = request.POST.get('descripcion')
+        comentario = request.POST.get('comentario', '')
+        id_frente = request.POST.get('id_frente')
+        
+        sitio = Sitio.objects.get(id=sitio_id)
+        sitio.descripcion = descripcion
+        sitio.comentario = comentario
+        sitio.id_frente_id = id_frente
+        sitio.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio actualizada correctamente',
+            'exito': True
+        })
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Sitio no encontrada',
+            'exito': False
+        })
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al actualizar sitio: {str(e)}',
+            'exito': False
+        })
+```
+
+### Getting Site Details
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["GET"])
+def obtener_sitio(request):
+    try:
+        sitio_id = request.GET.get('id')
+        sitio = Sitio.objects.get(id=sitio_id)
+        return JsonResponse({
+            'id': sitio.id,
+            'descripcion': sitio.descripcion,
+            'comentario': sitio.comentario,
+            'id_frente': sitio.id_frente_id,
+            'activo': sitio.activo
+        })
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Sitio no encontrada'
+        }, status=404)
+```
+
+### Deleting (Deactivating) Sites
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def eliminar_sitio(request):
+    try:
+        sitio_id = request.POST.get('sitio_id')
+        
+        if not sitio_id:
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'ID de sitio no proporcionado',
+                'exito': False
+            })
+
+        sitio = Sitio.objects.get(id=sitio_id)
+        sitio.activo = False
+        sitio.save()
+
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio desactivada correctamente',
+            'exito': True
+        })
+
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Sitio no encontrada',
+            'exito': False
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al desactivar sitio: {str(e)}',
+            'exito': False
+        })
+```
+
+## Query Center Integration
+
+The Query Center module uses fronts to filter operational data:
+
+```python operaciones/views/centro_consulta.py
+@login_required
+def fn_obtener_frente_afectacion_dos(solicitud):
+    """Get fronts with affectation level 2 for OT filtering"""
+    try:
+        frentes_listado = Frente.objects.filter(nivel_afectacion=2, activo=True)
+        return JsonResponse([
+            {
+                "id": f.id,
+                "descripcion": f.descripcion,
+                "afectacion": f.nivel_afectacion,
+                "comentario": f.comentario,
+                "activo": f.activo
+            } for f in frentes_listado
+        ], safe=False) if frentes_listado.exists() else JsonResponse({
+            "tipo_aviso": "error",
+            "detalles": "No se encontraron frentes con afectación 2"
+        }, status=404)
+    except Exception as error_proceso:
+        return JsonResponse({
+            "tipo_aviso": "error", 
+            "detalles": f"Error en el servidor: {str(error_proceso)}"
+        }, status=500)
+```
+
+## URL Configuration
+
+```python operaciones/urls.py
+# URLs for Fronts
+path('catalogos/frentes/', catalogos.lista_frentes, name='lista_frentes'),
+path('catalogos/datatable_frentes/', catalogos.datatable_frentes, name='datatable_frentes'),
+path('catalogos/frentes/crear/', catalogos.crear_frente, name='crear_frente'),
+path('catalogos/frentes/eliminar/', catalogos.eliminar_frente, name='eliminar_frente'),
+path('catalogos/frentes/obtener/', catalogos.obtener_frente, name='obtener_frente'),
+path('catalogos/frentes/editar/', catalogos.editar_frente, name='editar_frente'),
+
+# URLs for Sites
+path('catalogos/sitios/', catalogos.lista_sitios, name='lista_sitios'),
+path('catalogos/datatable_sitios/', catalogos.datatable_sitios, name='datatable_sitios'),
+path('catalogos/sitios/crear/', catalogos.crear_sitio, name='crear_sitio'),
+path('catalogos/sitios/eliminar/', catalogos.eliminar_sitio, name='eliminar_sitio'),
+path('catalogos/sitios/obtener/', catalogos.obtener_sitio, name='obtener_sitio'),
+path('catalogos/sitios/editar/', catalogos.editar_sitio, name='editar_sitio'),
+
+# Query Center - Frentes API
+path('catalogos/frentes/obtener_nivel_afectacion_dos/', centro_consulta.fn_obtener_frente_afectacion_dos, name='obtener_frente_afectacion_dos'),
+```
+
+## Site Resolution in Work Orders
+
+Work orders use fronts to determine the correct site field:
+
+```python operaciones/views/centro_consulta.py (excerpt)
+CASE
+    WHEN o.id_frente_id = 1  -- Patio
+        THEN o.id_patio
+    WHEN o.id_frente_id = 2  -- Vessel
+        THEN o.id_embarcacion
+    WHEN o.id_frente_id = 4  -- Platform
+        THEN o.id_plataforma
+    ELSE NULL
+END AS id_sitio_oficial,
+
+CASE
+    WHEN o.id_frente_id = 1
+        THEN COALESCE(s_pat.descripcion, 'SIN PATIO')
+    WHEN o.id_frente_id = 2
+        THEN COALESCE(s_emb.descripcion, 'SIN EMBARCACION')
+    WHEN o.id_frente_id = 4
+        THEN COALESCE(s_plat.descripcion, 'SIN PLATAFORMA')
+    ELSE 'SIN UBICACIÓN'
+END AS sitio_oficial
+```
+
+<Info>
+  **Dynamic Site Mapping**: Fronts with ID 1, 2, or 4 map to patio, vessel (embarcación), or platform (plataforma) respectively.
+</Info>
+
+## Best Practices
+
+<Steps>
+  <Step title="Hierarchical Design">
+    Always create fronts before creating sites. Sites require a valid front reference.
+  </Step>
+  
+  <Step title="Consistent Naming">
+    Use consistent naming conventions:
+    - Fronts: Broad categories ("PATIO", "EMBARCACION", "PLATAFORMA")
+    - Sites: Specific locations ("PATIO A", "EMBARCACION MAYA 1")
+  </Step>
+  
+  <Step title="Affectation Levels">
+    Set appropriate `nivel_afectacion`:
+    - Level 1: For site-level operations
+    - Level 2: For work order-level operations
+  </Step>
+  
+  <Step title="Soft Delete Only">
+    Never hard-delete fronts or sites. Use `activo=False` to maintain data integrity.
+  </Step>
+</Steps>
+
+<Warning>
+  **Foreign Key Constraints**: Deactivating a front with active sites may cause validation issues. Always check site references before deactivation.
+</Warning>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Catalogs Overview" icon="database" href="/features/catalogs/overview">
+    Return to catalog management overview
+  </Card>
+  <Card title="Query Center" icon="magnifying-glass-chart" href="/features/centro-consulta/overview">
+    See how sites are used in queries
+  </Card>
+</CardGroup>

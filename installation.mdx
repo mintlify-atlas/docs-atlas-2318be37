@@ -1,0 +1,889 @@
+---
+title: 'Installation Guide'
+description: 'Complete installation and configuration instructions for SASCOP BME SubTec'
+icon: 'download'
+---
+
+## Overview
+
+This comprehensive guide covers installing and configuring SASCOP BME SubTec for both development and production environments. The system is built with Django 4.2.7 and requires PostgreSQL as the database backend.
+
+<Info>
+  **Estimated Time**: 30-45 minutes for a complete setup
+</Info>
+
+## System Requirements
+
+### Software Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="Python" icon="python">
+    **Version**: Python 3.9 or higher
+    
+    Verify installation:
+    ```bash
+    python --version
+    ```
+  </Card>
+  
+  <Card title="PostgreSQL" icon="database">
+    **Version**: PostgreSQL 12 or higher
+    
+    Verify installation:
+    ```bash
+    psql --version
+    ```
+  </Card>
+  
+  <Card title="pip" icon="box">
+    **Version**: pip 21.0 or higher
+    
+    Upgrade pip:
+    ```bash
+    pip install --upgrade pip
+    ```
+  </Card>
+  
+  <Card title="Git" icon="git">
+    **Version**: Git 2.0 or higher
+    
+    Check version:
+    ```bash
+    git --version
+    ```
+  </Card>
+</CardGroup>
+
+### Hardware Requirements
+
+<Tabs>
+  <Tab title="Development">
+    - **CPU**: 2 cores minimum
+    - **RAM**: 4 GB minimum, 8 GB recommended
+    - **Storage**: 10 GB available space
+    - **Network**: Stable internet connection
+  </Tab>
+  
+  <Tab title="Production">
+    - **CPU**: 4 cores minimum, 8 cores recommended
+    - **RAM**: 8 GB minimum, 16 GB recommended
+    - **Storage**: 50 GB available space (depends on data volume)
+    - **Network**: High-speed connection with static IP
+  </Tab>
+</Tabs>
+
+## Installation Steps
+
+### 1. System Preparation
+
+<Steps>
+  <Step title="Update System Packages">
+    <Tabs>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        sudo apt update
+        sudo apt upgrade -y
+        ```
+      </Tab>
+      
+      <Tab title="CentOS/RHEL">
+        ```bash
+        sudo yum update -y
+        ```
+      </Tab>
+      
+      <Tab title="macOS">
+        ```bash
+        brew update
+        brew upgrade
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install PostgreSQL">
+    <Tabs>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        sudo apt install postgresql postgresql-contrib libpq-dev -y
+        sudo systemctl start postgresql
+        sudo systemctl enable postgresql
+        ```
+      </Tab>
+      
+      <Tab title="macOS">
+        ```bash
+        brew install postgresql
+        brew services start postgresql
+        ```
+      </Tab>
+      
+      <Tab title="Windows">
+        Download and install from:
+        https://www.postgresql.org/download/windows/
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Install Python Development Tools">
+    <Tabs>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        sudo apt install python3 python3-pip python3-dev python3-venv -y
+        ```
+      </Tab>
+      
+      <Tab title="CentOS/RHEL">
+        ```bash
+        sudo yum install python3 python3-pip python3-devel -y
+        ```
+      </Tab>
+      
+      <Tab title="macOS">
+        ```bash
+        brew install python3
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+### 2. Database Setup
+
+<Steps>
+  <Step title="Create PostgreSQL Database">
+    Connect to PostgreSQL and create the database:
+
+    ```bash
+    sudo -u postgres psql
+    ```
+
+    ```sql
+    -- Create database
+    CREATE DATABASE sascop_production;
+    
+    -- Create user
+    CREATE USER sascop_user WITH PASSWORD 'secure_password_here';
+    
+    -- Grant privileges
+    ALTER ROLE sascop_user SET client_encoding TO 'utf8';
+    ALTER ROLE sascop_user SET default_transaction_isolation TO 'read committed';
+    ALTER ROLE sascop_user SET timezone TO 'America/Mexico_City';
+    GRANT ALL PRIVILEGES ON DATABASE sascop_production TO sascop_user;
+    
+    -- Exit
+    \q
+    ```
+
+    <Note>
+      Replace `secure_password_here` with a strong password. Save this for later use.
+    </Note>
+  </Step>
+
+  <Step title="Configure PostgreSQL Access">
+    Edit PostgreSQL configuration to allow application access:
+
+    ```bash
+    sudo nano /etc/postgresql/[version]/main/pg_hba.conf
+    ```
+
+    Add or modify the following line:
+
+    ```
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    host    sascop_production  sascop_user     127.0.0.1/32            md5
+    ```
+
+    Restart PostgreSQL:
+
+    ```bash
+    sudo systemctl restart postgresql
+    ```
+  </Step>
+
+  <Step title="Test Database Connection">
+    Verify you can connect:
+
+    ```bash
+    psql -h localhost -U sascop_user -d sascop_production
+    ```
+
+    Enter the password when prompted. If successful, you'll see the PostgreSQL prompt.
+  </Step>
+</Steps>
+
+### 3. Application Installation
+
+<Steps>
+  <Step title="Clone Repository">
+    ```bash
+    cd /opt  # or your preferred directory
+    git clone <repository-url> sascop
+    cd sascop
+    ```
+  </Step>
+
+  <Step title="Create Virtual Environment">
+    Create and activate a Python virtual environment:
+
+    ```bash
+    python3 -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    ```
+
+    <Tip>
+      Always activate the virtual environment before working with the application.
+    </Tip>
+  </Step>
+
+  <Step title="Install Python Dependencies">
+    Install all required packages from requirements.txt:
+
+    ```bash
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+    <Accordion title="Core Dependencies Explained">
+      ```python requirements.txt
+      # Web Framework
+      Django==4.2.7              # Main framework
+      gunicorn==21.2.0           # WSGI server for production
+      
+      # Database
+      psycopg2-binary==2.9.7     # PostgreSQL adapter
+      
+      # Static Files
+      whitenoise==6.4.0          # Static file serving
+      
+      # Data Processing
+      pandas==2.3.3              # Data analysis
+      numpy==2.3.3               # Numerical computing
+      openpyxl==3.1.5            # Excel file handling
+      XlsxWriter==3.1.2          # Excel generation
+      
+      # PDF Generation
+      reportlab==4.0.4           # PDF creation
+      PyPDF2==3.0.1              # PDF manipulation
+      
+      # Visualization
+      matplotlib==3.10.8         # Charts and graphs
+      qrcode==7.4.2              # QR code generation
+      
+      # Email
+      django-anymail==14.0       # Email service integration
+      
+      # Utilities
+      python-dotenv==1.0.0       # Environment variable management
+      beautifulsoup4==4.12.2     # HTML parsing
+      requests==2.31.0           # HTTP library
+      ```
+
+      See full file at: `requirements.txt:1`
+    </Accordion>
+  </Step>
+
+  <Step title="Verify Installation">
+    Check that all packages installed correctly:
+
+    ```bash
+    pip list
+    python -c "import django; print(django.get_version())"
+    ```
+
+    Expected output: `4.2.7`
+  </Step>
+</Steps>
+
+### 4. Configuration
+
+<Steps>
+  <Step title="Create Environment File">
+    Create a `.env` file in the project root:
+
+    ```bash
+    touch .env
+    chmod 600 .env  # Restrict access
+    ```
+
+    Add the following configuration:
+
+    ```bash .env
+    # ======================
+    # SECURITY SETTINGS
+    # ======================
+    SECRET_KEY=your-unique-secret-key-generate-this-randomly
+    DEBUG=False
+    
+    # ======================
+    # DATABASE CONFIGURATION
+    # ======================
+    RDS_DB_NAME=sascop_production
+    RDS_USERNAME=sascop_user
+    RDS_PASSWORD=secure_password_here
+    RDS_HOSTNAME=localhost
+    RDS_PORT=5432
+    
+    # ======================
+    # EMAIL CONFIGURATION
+    # ======================
+    EMAIL_HOST=smtp.gmail.com
+    EMAIL_PORT=587
+    EMAIL_USE_TLS=True
+    EMAIL_HOST_USER=notifications@yourcompany.com
+    EMAIL_HOST_PASSWORD=your-email-app-password
+    DEFAULT_FROM_EMAIL=SASCOP <noreply@yourcompany.com>
+    
+    # Optional: SendGrid
+    # SENDGRID_API_KEY=your-sendgrid-api-key
+    
+    # ======================
+    # PAYMENT GATEWAY (Optional)
+    # ======================
+    OPENPAY_MERCHANT_ID=
+    OPENPAY_PRIVATE_KEY=
+    OPENPAY_PRODUCTION=False
+    ```
+
+    <Warning>
+      **Generate a Secure SECRET_KEY**:
+      
+      ```python
+      python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
+      ```
+      
+      Copy the output and use it as your SECRET_KEY.
+    </Warning>
+  </Step>
+
+  <Step title="Configure Settings">
+    The main settings file is at `bme_subtec/settings.py`. Key configurations:
+
+    <CodeGroup>
+      ```python Security Settings
+      # From settings.py:9-30
+      SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-bme-subtec-default-key-change-in-production')
+      DEBUG = os.getenv('DEBUG', 'True') == 'True'
+      
+      ALLOWED_HOSTS = [
+          'localhost',
+          '127.0.0.1',
+          '0.0.0.0',
+          'your-production-domain.com',
+      ]
+      
+      CSRF_TRUSTED_ORIGINS = [
+          'http://localhost',
+          'http://127.0.0.1',
+          'https://your-production-domain.com',
+      ]
+      ```
+
+      ```python Database Settings
+      # From settings.py:82-94
+      DATABASES = {
+          'default': {
+              'ENGINE': 'django.db.backends.postgresql',
+              'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+              'USER': os.environ.get('RDS_USERNAME', 'postgres'),
+              'PASSWORD': os.environ.get('RDS_PASSWORD', ''),
+              'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+              'PORT': os.environ.get('RDS_PORT', '5432'),
+              'OPTIONS': {
+                  'sslmode': 'require',  # Remove for local dev
+              }
+          }
+      }
+      ```
+
+      ```python Installed Apps
+      # From settings.py:32-47
+      INSTALLED_APPS = [
+          'django.contrib.admin',
+          'django.contrib.auth',
+          'django.contrib.contenttypes',
+          'django.contrib.sessions',
+          'django.contrib.messages',
+          'django.contrib.staticfiles',
+          'operaciones',      # Main application
+          'anymail',          # Email services
+          'core',             # Dashboard and utilities
+          'costa_fuera',      # Offshore operations
+          'reportes',         # Reporting module
+      ]
+      ```
+
+      ```python Middleware Configuration
+      # From settings.py:49-59
+      MIDDLEWARE = [
+          'django.middleware.security.SecurityMiddleware',
+          'whitenoise.middleware.WhiteNoiseMiddleware',
+          'django.contrib.sessions.middleware.SessionMiddleware',
+          'django.middleware.common.CommonMiddleware',
+          'django.middleware.csrf.CsrfViewMiddleware',
+          'django.contrib.auth.middleware.AuthenticationMiddleware',
+          'django.contrib.messages.middleware.MessageMiddleware',
+          'django.middleware.clickjacking.XFrameOptionsMiddleware',
+          'operaciones.middleware.SessionTimeoutMiddleware',  # Custom
+      ]
+      ```
+    </CodeGroup>
+
+    <Info>
+      The custom `SessionTimeoutMiddleware` automatically logs out users after 2 hours of inactivity (configurable via `SESSION_COOKIE_AGE`).
+    </Info>
+  </Step>
+
+  <Step title="Configure Localization">
+    The system is configured for Mexican timezone and Spanish language:
+
+    ```python settings.py
+    # From settings.py:124-127
+    LANGUAGE_CODE = 'es-mx'
+    TIME_ZONE = 'America/Mexico_City'
+    USE_I18N = True
+    USE_TZ = True
+    ```
+
+    Adjust these settings for your region if needed.
+  </Step>
+</Steps>
+
+### 5. Database Migration
+
+<Steps>
+  <Step title="Run Initial Migrations">
+    Create all database tables:
+
+    ```bash
+    python manage.py migrate
+    ```
+
+    This creates tables for:
+    - **Authentication**: User accounts and permissions
+    - **PTEs**: Technical project proposals (pte_header, pte_detalle)
+    - **OTEs**: Work orders (ot, ot_detalle)
+    - **Catalogs**: Reference data (tipo, frente, estatus, sitio, etc.)
+    - **Production**: Production tracking (produccion, reporte_mensual, reporte_diario)
+    - **Contracts**: Contract and pricing (contrato, anexo_contrato, concepto_maestro)
+    - **Estimations**: Financial estimations (estimacion_header, estimacion_detalle)
+    - **Activity Logs**: User activity tracking (registro_actividad)
+  </Step>
+
+  <Step title="Create Superuser Account">
+    Create an administrator account:
+
+    ```bash
+    python manage.py createsuperuser
+    ```
+
+    Enter the requested information:
+    - Username: (e.g., admin)
+    - Email: (e.g., admin@yourcompany.com)
+    - Password: (strong password)
+  </Step>
+
+  <Step title="Verify Database Schema">
+    Connect to the database and verify tables were created:
+
+    ```bash
+    psql -h localhost -U sascop_user -d sascop_production
+    ```
+
+    ```sql
+    \dt  -- List all tables
+    ```
+
+    You should see tables like: `pte_header`, `ot`, `produccion`, etc.
+  </Step>
+</Steps>
+
+### 6. Static Files Configuration
+
+<Steps>
+  <Step title="Collect Static Files">
+    Gather all static assets:
+
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+
+    This copies files from:
+    - Django admin (`django.contrib.admin`)
+    - Application static files (`operaciones/static/`)
+    
+    To the `STATIC_ROOT` directory (`staticfiles/`).
+  </Step>
+
+  <Step title="Configure Static Files Serving">
+    The system uses WhiteNoise for efficient static file serving:
+
+    ```python settings.py
+    # From settings.py:129-131
+    STATIC_URL = '/static/'
+    STATIC_ROOT = BASE_DIR / 'staticfiles'
+    STATICFILES_DIRS = [
+        BASE_DIR / 'operaciones' / 'static',
+    ]
+    ```
+
+    WhiteNoise is configured in middleware (settings.py:51):
+    ```python
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    ```
+  </Step>
+
+  <Step title="Set Correct Permissions">
+    Ensure static files are readable:
+
+    ```bash
+    chmod -R 755 staticfiles/
+    ```
+  </Step>
+</Steps>
+
+### 7. Testing the Installation
+
+<Steps>
+  <Step title="Run Development Server">
+    Start the Django development server:
+
+    ```bash
+    python manage.py runserver 0.0.0.0:8000
+    ```
+
+    The application will be available at `http://localhost:8000/`
+  </Step>
+
+  <Step title="Access the Application">
+    Open your browser and navigate to:
+
+    <CardGroup cols={2}>
+      <Card title="Login Page" icon="lock">
+        `http://localhost:8000/accounts/login/`
+        
+        Test the custom login functionality that accepts username or email.
+      </Card>
+      
+      <Card title="Admin Panel" icon="user-shield">
+        `http://localhost:8000/admin/`
+        
+        Login with your superuser credentials.
+      </Card>
+    </CardGroup>
+  </Step>
+
+  <Step title="Verify Core Functionality">
+    After logging in, check:
+
+    1. **Dashboard** (`/`): Main dashboard loads
+    2. **PTE List** (`/operaciones/pte/`): PTE management interface
+    3. **OT List** (`/operaciones/ot/`): Work order management
+    4. **Production** (`/operaciones/produccion/`): Production tracking
+    5. **Centro de Consulta** (`/operaciones/centro_consulta/centro-consulta/`): BI dashboard
+  </Step>
+</Steps>
+
+## Production Deployment
+
+### Using Gunicorn
+
+<Steps>
+  <Step title="Create Gunicorn Configuration">
+    Create `gunicorn_config.py` in the project root:
+
+    ```python gunicorn_config.py
+    import multiprocessing
+
+    # Server socket
+    bind = "0.0.0.0:8000"
+    backlog = 2048
+
+    # Worker processes
+    workers = multiprocessing.cpu_count() * 2 + 1
+    worker_class = 'sync'
+    worker_connections = 1000
+    timeout = 120
+    keepalive = 5
+
+    # Logging
+    accesslog = '/var/log/sascop/access.log'
+    errorlog = '/var/log/sascop/error.log'
+    loglevel = 'info'
+    
+    # Process naming
+    proc_name = 'sascop_bme_subtec'
+
+    # Server mechanics
+    daemon = False
+    pidfile = '/var/run/sascop.pid'
+    user = None
+    group = None
+    tmp_upload_dir = None
+    ```
+  </Step>
+
+  <Step title="Create Systemd Service">
+    Create `/etc/systemd/system/sascop.service`:
+
+    ```ini sascop.service
+    [Unit]
+    Description=SASCOP BME SubTec Gunicorn daemon
+    After=network.target postgresql.service
+    Requires=postgresql.service
+
+    [Service]
+    Type=notify
+    User=www-data
+    Group=www-data
+    WorkingDirectory=/opt/sascop
+    Environment="PATH=/opt/sascop/venv/bin"
+    EnvironmentFile=/opt/sascop/.env
+    ExecStart=/opt/sascop/venv/bin/gunicorn \
+              --config /opt/sascop/gunicorn_config.py \
+              bme_subtec.wsgi:application
+    ExecReload=/bin/kill -s HUP $MAINPID
+    KillMode=mixed
+    TimeoutStopSec=5
+    PrivateTmp=true
+    Restart=always
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+  </Step>
+
+  <Step title="Start and Enable Service">
+    ```bash
+    # Reload systemd
+    sudo systemctl daemon-reload
+    
+    # Start service
+    sudo systemctl start sascop
+    
+    # Enable on boot
+    sudo systemctl enable sascop
+    
+    # Check status
+    sudo systemctl status sascop
+    ```
+  </Step>
+</Steps>
+
+### Nginx Configuration
+
+<Steps>
+  <Step title="Install Nginx">
+    ```bash
+    sudo apt install nginx -y
+    ```
+  </Step>
+
+  <Step title="Create Nginx Configuration">
+    Create `/etc/nginx/sites-available/sascop`:
+
+    ```nginx sascop.conf
+    upstream sascop_app {
+        server 127.0.0.1:8000 fail_timeout=0;
+    }
+
+    server {
+        listen 80;
+        server_name your-domain.com www.your-domain.com;
+        
+        client_max_body_size 100M;
+        
+        # Redirect to HTTPS
+        return 301 https://$server_name$request_uri;
+    }
+
+    server {
+        listen 443 ssl http2;
+        server_name your-domain.com www.your-domain.com;
+
+        ssl_certificate /etc/ssl/certs/your-cert.crt;
+        ssl_certificate_key /etc/ssl/private/your-key.key;
+        
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        
+        client_max_body_size 100M;
+        
+        # Static files
+        location /static/ {
+            alias /opt/sascop/staticfiles/;
+            expires 30d;
+            add_header Cache-Control "public, immutable";
+        }
+        
+        # Media files
+        location /media/ {
+            alias /opt/sascop/media/;
+        }
+        
+        # Application
+        location / {
+            proxy_pass http://sascop_app;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_redirect off;
+            proxy_buffering off;
+        }
+    }
+    ```
+  </Step>
+
+  <Step title="Enable Site and Restart Nginx">
+    ```bash
+    sudo ln -s /etc/nginx/sites-available/sascop /etc/nginx/sites-enabled/
+    sudo nginx -t  # Test configuration
+    sudo systemctl restart nginx
+    ```
+  </Step>
+</Steps>
+
+## Post-Installation
+
+<Steps>
+  <Step title="Load Initial Data">
+    If you have fixtures or initial data:
+
+    ```bash
+    python manage.py loaddata initial_data.json
+    ```
+
+    Or import Excel files using the admin interface or management commands.
+  </Step>
+
+  <Step title="Configure Backup Strategy">
+    Set up automated PostgreSQL backups:
+
+    ```bash backup.sh
+    #!/bin/bash
+    BACKUP_DIR="/backup/sascop"
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    
+    pg_dump -h localhost -U sascop_user sascop_production | \
+        gzip > $BACKUP_DIR/sascop_$TIMESTAMP.sql.gz
+    
+    # Keep only last 30 days
+    find $BACKUP_DIR -name "*.sql.gz" -mtime +30 -delete
+    ```
+
+    Add to crontab:
+    ```bash
+    0 2 * * * /opt/sascop/backup.sh
+    ```
+  </Step>
+
+  <Step title="Set Up Monitoring">
+    Monitor application health:
+
+    - Check Gunicorn logs: `/var/log/sascop/`
+    - Monitor PostgreSQL: `sudo systemctl status postgresql`
+    - Check Nginx access: `/var/log/nginx/access.log`
+    - Monitor disk space: `df -h`
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Import Error: No module named 'psycopg2'">
+    This indicates the PostgreSQL adapter isn't installed:
+
+    ```bash
+    # Install system dependencies first
+    sudo apt install libpq-dev python3-dev
+    
+    # Reinstall psycopg2
+    pip install --upgrade psycopg2-binary
+    ```
+  </Accordion>
+
+  <Accordion title="Database Connection Refused">
+    Check PostgreSQL is running and accepting connections:
+
+    ```bash
+    sudo systemctl status postgresql
+    sudo systemctl start postgresql
+    ```
+
+    Verify connection parameters:
+    ```bash
+    psql -h localhost -U sascop_user -d sascop_production
+    ```
+
+    Check `pg_hba.conf` for proper authentication settings.
+  </Accordion>
+
+  <Accordion title="Static Files Not Loading in Production">
+    1. Ensure WhiteNoise is in MIDDLEWARE
+    2. Run collectstatic:
+       ```bash
+       python manage.py collectstatic --noinput --clear
+       ```
+    3. Check file permissions:
+       ```bash
+       ls -la staticfiles/
+       ```
+    4. Verify STATIC_ROOT path is correct
+  </Accordion>
+
+  <Accordion title="Permission Denied Errors">
+    Set correct ownership and permissions:
+
+    ```bash
+    # Change ownership to web server user
+    sudo chown -R www-data:www-data /opt/sascop
+    
+    # Set directory permissions
+    find /opt/sascop -type d -exec chmod 755 {} \;
+    
+    # Set file permissions
+    find /opt/sascop -type f -exec chmod 644 {} \;
+    
+    # Make manage.py executable
+    chmod +x /opt/sascop/manage.py
+    ```
+  </Accordion>
+
+  <Accordion title="Migration Errors">
+    If migrations fail:
+
+    1. Check database connectivity
+    2. Verify user has CREATE permission
+    3. Try running migrations with verbosity:
+       ```bash
+       python manage.py migrate --verbosity 3
+       ```
+    4. If needed, fake migrations (use with caution):
+       ```bash
+       python manage.py migrate --fake
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="sitemap" href="/concepts/architecture">
+    Learn about the system architecture and data models
+  </Card>
+  <Card title="User Roles" icon="users" href="/concepts/user-roles">
+    Configure user permissions and roles
+  </Card>
+  <Card title="Workflow Guide" icon="diagram-project" href="/concepts/workflow">
+    Understand the PTE to OTE workflow
+  </Card>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Quick reference for common tasks
+  </Card>
+</CardGroup>
+
+<Note>
+  This installation guide is based on the production configuration at `bme_subtec/settings.py`. Customize settings based on your specific deployment requirements.
+</Note>

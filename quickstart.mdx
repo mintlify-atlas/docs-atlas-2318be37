@@ -1,80 +1,444 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart Guide'
+description: 'Get up and running with SASCOP BME SubTec in minutes'
+icon: 'rocket'
 ---
 
-## Get started in three steps
+## Welcome to SASCOP BME SubTec
 
-Get your documentation site running locally and make your first customization.
+SASCOP BME SubTec is a comprehensive Django-based project management system designed for underwater subsea operations. This guide will help you set up and start using the system quickly.
 
-### Step 1: Set up your local environment
+<Info>
+  **What is SASCOP BME SubTec?** A specialized platform for managing PTEs (Technical Project Proposals), OTEs (Work Orders), production tracking, and financial estimations in subsea engineering projects.
+</Info>
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+## Quick Setup
 
-### Step 2: Deploy your changes
+<Steps>
+  <Step title="Clone the Repository">
+    Start by cloning the SASCOP BME SubTec repository to your local machine:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```bash
+    git clone <repository-url>
+    cd bme_subtec
+    ```
+  </Step>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+  <Step title="Install Dependencies">
+    Install all required Python packages using pip:
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-### Step 3: Go live
+    <Accordion title="View Core Dependencies">
+      The system requires the following key packages:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+      ```txt
+      Django==4.2.7
+      psycopg2-binary==2.9.7
+      gunicorn==21.2.0
+      django-anymail==14.0
+      whitenoise==6.4.0
+      python-dotenv==1.0.0
+      openpyxl==3.1.5
+      pandas==2.3.3
+      reportlab==4.0.4
+      qrcode==7.4.2
+      matplotlib==3.10.8
+      ```
 
-## Next steps
+      See the full `requirements.txt` at `~/workspace/source/requirements.txt`
+    </Accordion>
+  </Step>
 
-Now that you have your docs running, explore these key features:
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the project root with your configuration:
+
+    ```bash
+    # Security
+    SECRET_KEY=your-secret-key-here
+    DEBUG=True
+
+    # Database Configuration (PostgreSQL)
+    RDS_DB_NAME=postgres
+    RDS_USERNAME=postgres
+    RDS_PASSWORD=your-password
+    RDS_HOSTNAME=localhost
+    RDS_PORT=5432
+
+    # Email Configuration
+    EMAIL_HOST=smtp.gmail.com
+    EMAIL_PORT=587
+    EMAIL_USE_TLS=True
+    EMAIL_HOST_USER=your-email@example.com
+    EMAIL_HOST_PASSWORD=your-email-password
+    DEFAULT_FROM_EMAIL=SASCOP <noreply@SASCOP.com>
+
+    # Payment Gateway (Optional)
+    OPENPAY_MERCHANT_ID=
+    OPENPAY_PRIVATE_KEY=
+    OPENPAY_PRODUCTION=False
+    ```
+
+    <Warning>
+      Never commit your `.env` file to version control. Add it to `.gitignore`.
+    </Warning>
+  </Step>
+
+  <Step title="Configure Database">
+    The system uses PostgreSQL with SSL. Update your database settings:
+
+    <CodeGroup>
+      ```python settings.py (Production)
+      DATABASES = {
+          'default': {
+              'ENGINE': 'django.db.backends.postgresql',
+              'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+              'USER': os.environ.get('RDS_USERNAME', 'postgres'),
+              'PASSWORD': os.environ.get('RDS_PASSWORD', ''),
+              'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+              'PORT': os.environ.get('RDS_PORT', '5432'),
+              'OPTIONS': {
+                  'sslmode': 'require',
+              }
+          }
+      }
+      ```
+
+      ```python settings.py (Local Development)
+      # For local development without SSL
+      DATABASES = {
+          'default': {
+              'ENGINE': 'django.db.backends.postgresql',
+              'NAME': 'sascop_local',
+              'USER': 'postgres',
+              'PASSWORD': 'root',
+              'HOST': 'localhost',
+              'PORT': '5433',
+          }
+      }
+      ```
+    </CodeGroup>
+
+    <Tip>
+      For local development, you can comment out the production config and use the local configuration shown above.
+    </Tip>
+  </Step>
+
+  <Step title="Run Migrations">
+    Apply database migrations to create all necessary tables:
+
+    ```bash
+    python manage.py migrate
+    ```
+
+    This will create tables for:
+    - User authentication
+    - PTEs (Technical Project Proposals)
+    - OTEs (Work Orders)
+    - Production tracking
+    - Catalogs (Sites, Statuses, Types, etc.)
+    - Estimations and billing
+  </Step>
+
+  <Step title="Create Superuser">
+    Create an admin account to access the Django admin panel:
+
+    ```bash
+    python manage.py createsuperuser
+    ```
+
+    Follow the prompts to set username, email, and password.
+  </Step>
+
+  <Step title="Collect Static Files">
+    Gather all static files for serving:
+
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+  </Step>
+
+  <Step title="Start the Development Server">
+    Launch the Django development server:
+
+    ```bash
+    python manage.py runserver
+    ```
+
+    The application will be available at `http://127.0.0.1:8000/`
+  </Step>
+</Steps>
+
+## First Login
+
+After starting the server, navigate to the login page:
+
+```
+http://127.0.0.1:8000/accounts/login/
+```
 
 <CardGroup cols={2}>
+  <Card title="Login with Username" icon="user">
+    Use the superuser credentials you created
+  </Card>
+  <Card title="Login with Email" icon="envelope">
+    The system also supports email-based authentication
+  </Card>
+</CardGroup>
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+### Authentication Features
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+The custom login system (`operaciones/views/login.py:11`) supports:
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
+- **Username or Email**: Login with either your username or email address
+- **Session Management**: 2-hour session timeout (configurable)
+- **Session Expiry Handling**: Automatic redirect with clear messaging
+- **Security**: CSRF protection enabled
 
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
+<CodeGroup>
+  ```python operaciones/views/login.py
+  @ensure_csrf_cookie 
+  def custom_login(request):
+      """Vista para login que acepta username o email"""
+      if request.user.is_authenticated:
+          return redirect('core:dashboard')
+      
+      if request.method == 'POST':
+          username_or_email = request.POST.get('username')
+          password = request.POST.get('password')
+          
+          # Try authenticating with username first
+          user = authenticate(request, username=username_or_email, password=password)
+          
+          # If failed, try with email
+          if user is None:
+              try:
+                  user_by_email = User.objects.get(email__iexact=username_or_email)
+                  user = authenticate(request, username=user_by_email.username, password=password)
+              except User.DoesNotExist:
+                  user = None
+          
+          if user is not None:
+              login(request, user)
+              request.session['last_activity'] = timezone.now().timestamp()
+              return redirect('core:dashboard')
+  ```
+</CodeGroup>
 
+## Verify Installation
+
+Once logged in, you should see the main dashboard at:
+
+```
+http://127.0.0.1:8000/
+```
+
+<Steps>
+  <Step title="Check Dashboard Access">
+    The dashboard is the central hub defined in `core/views/dashboard.py:6`:
+
+    ```python
+    @login_required
+    def index(request):
+        """Dashboard principal"""
+        context = {
+            'modulo_actual': 'dashboard'
+        }
+        return render(request, 'core/dashboard.html', context)
+    ```
+  </Step>
+
+  <Step title="Access Main Modules">
+    From the dashboard, you can access:
+
+    - **PTEs**: Technical Project Proposals management
+    - **OTEs**: Work Orders and operations
+    - **Production**: Daily and monthly production tracking
+    - **Catalogs**: Master data configuration
+    - **Centro de Consulta**: Business intelligence and reporting
+  </Step>
+
+  <Step title="Verify Admin Panel">
+    Access the Django admin at:
+
+    ```
+    http://127.0.0.1:8000/admin/
+    ```
+
+    Use your superuser credentials to manage data directly.
+  </Step>
+</Steps>
+
+## Production Deployment
+
+<Warning>
+  Before deploying to production, ensure you:
+  1. Set `DEBUG=False` in your `.env` file
+  2. Configure proper `ALLOWED_HOSTS`
+  3. Use a strong `SECRET_KEY`
+  4. Enable SSL for database connections
+  5. Configure WhiteNoise for static files
+</Warning>
+
+### Using Gunicorn
+
+For production, use Gunicorn as the WSGI server:
+
+```bash
+gunicorn bme_subtec.wsgi:application \
+  --bind 0.0.0.0:8000 \
+  --workers 4 \
+  --timeout 120
+```
+
+### Production Settings Checklist
+
+<Accordion title="Security Settings">
+  ```python bme_subtec/settings.py
+  # Security settings from settings.py:9-23
+  SECRET_KEY = os.getenv('SECRET_KEY', 'change-in-production')
+  DEBUG = os.getenv('DEBUG', 'True') == 'True'
+  
+  ALLOWED_HOSTS = [
+      'localhost',
+      '127.0.0.1',
+      'your-domain.com',
+  ]
+  
+  # CSRF Protection
+  CSRF_TRUSTED_ORIGINS = [
+      'https://your-domain.com',
+  ]
+  
+  # Session Security
+  SESSION_COOKIE_SECURE = True  # HTTPS only
+  CSRF_COOKIE_SECURE = True     # HTTPS only
+  SESSION_COOKIE_AGE = 7200     # 2 hours
+  SESSION_SAVE_EVERY_REQUEST = True
+  ```
+</Accordion>
+
+<Accordion title="Static Files Configuration">
+  ```python bme_subtec/settings.py
+  # Static files with WhiteNoise
+  STATIC_URL = '/static/'
+  STATIC_ROOT = BASE_DIR / 'staticfiles'
+  STATICFILES_DIRS = [
+      BASE_DIR / 'operaciones' / 'static',
+  ]
+  
+  MIDDLEWARE = [
+      'django.middleware.security.SecurityMiddleware',
+      'whitenoise.middleware.WhiteNoiseMiddleware',  # After SecurityMiddleware
+      # ... other middleware
+  ]
+  ```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Learn about the system architecture and components
+  </Card>
+  <Card title="User Roles" icon="users" href="/concepts/user-roles">
+    Understand user roles and permissions
+  </Card>
+  <Card title="Workflow" icon="diagram-project" href="/concepts/workflow">
+    Explore the PTE to OTE workflow
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed installation and configuration guide
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Database Connection Error">
+    If you encounter database connection errors:
+
+    1. Verify PostgreSQL is running:
+       ```bash
+       sudo systemctl status postgresql
+       ```
+
+    2. Check your database credentials in `.env`
+
+    3. For local development, disable SSL:
+       ```python
+       # Comment out 'OPTIONS': {'sslmode': 'require'}
+       ```
+
+    4. Create the database if it doesn't exist:
+       ```bash
+       psql -U postgres -c "CREATE DATABASE sascop_local;"
+       ```
+  </Accordion>
+
+  <Accordion title="Static Files Not Loading">
+    If static files (CSS, JS) aren't loading:
+
+    1. Run collectstatic again:
+       ```bash
+       python manage.py collectstatic --noinput
+       ```
+
+    2. Verify STATIC_ROOT path exists
+
+    3. Check WhiteNoise is in MIDDLEWARE
+
+    4. In development, Django serves static files automatically with DEBUG=True
+  </Accordion>
+
+  <Accordion title="Session Timeout Issues">
+    If users are logged out too quickly:
+
+    Adjust session timeout in `settings.py:141`:
+
+    ```python
+    SESSION_COOKIE_AGE = 7200  # 2 hours (in seconds)
+    SESSION_SAVE_EVERY_REQUEST = True
+    SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+    ```
+
+    The `SessionTimeoutMiddleware` at `operaciones/middleware.py:5` manages automatic logout.
+  </Accordion>
+
+  <Accordion title="Email Configuration">
+    If emails aren't sending:
+
+    1. Verify SMTP settings in `.env`
+    2. For Gmail, use an App Password (not your regular password)
+    3. Test with Django shell:
+       ```python
+       from django.core.mail import send_mail
+       send_mail('Test', 'Message', 'from@example.com', ['to@example.com'])
+       ```
+
+    Alternative: Use SendGrid (commented in settings.py:157):
+    ```python
+    EMAIL_BACKEND = "anymail.backends.sendgrid.EmailBackend"
+    ANYMAIL = {
+       "SENDGRID_API_KEY": os.getenv("SENDGRID_API_KEY", ""),
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="Documentation" icon="book">
+    Browse the complete documentation for detailed guides
+  </Card>
+  <Card title="Source Code" icon="code">
+    Review the source code at `~/workspace/source/`
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This quickstart covers the basics. For production deployments, review the [Installation Guide](/installation) for comprehensive configuration options.
 </Note>

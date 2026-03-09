@@ -1,0 +1,530 @@
+---
+title: 'Generating Reports'
+description: 'Create, export, and analyze reports in SASCOP BME SubTec'
+icon: 'file-pdf'
+---
+
+## Overview
+
+SASCOP BME SubTec provides comprehensive reporting capabilities for project tracking, production analysis, and financial oversight. This guide covers available reports and how to generate them.
+
+## Report Categories
+
+<CardGroup cols={2}>
+  <Card title="Project Reports" icon="folder-open">
+    - PTE summary reports
+    - Work order progress
+    - Timeline analysis
+    - Deliverable tracking
+  </Card>
+  
+  <Card title="Production Reports" icon="chart-line">
+    - Daily production logs
+    - Monthly summaries
+    - Volume tracking
+    - GPU validation status
+  </Card>
+  
+  <Card title="Financial Reports" icon="dollar-sign">
+    - Cost accumulation
+    - Authorization vs execution
+    - Pending billing
+    - Budget analysis
+  </Card>
+  
+  <Card title="Activity Reports" icon="clock-rotate-left">
+    - User activity logs
+    - System modifications
+    - Audit trail
+  </Card>
+</CardGroup>
+
+## Project Status Reports
+
+### PTE Summary Report
+
+View overall PTE statistics and status:
+
+<Steps>
+  <Step title="Access PTE Module">
+    Navigate to **Operaciones > PTEs**
+  </Step>
+  
+  <Step title="View Dashboard Metrics">
+    ```python operaciones/views/pte.py
+    @login_required(login_url='/accounts/login/')
+    def index(request):
+        context = {
+            'total_ptes': PTEHeader.objects.filter(estatus__in=[1,2,3,4]).count(),
+            'ptes_activo': PTEHeader.objects.filter(estatus=1).count(),
+            'ptes_en_proceso': PTEHeader.objects.filter(estatus=2).count(),
+            'ptes_terminado': PTEHeader.objects.filter(estatus=3).count(),
+            'ptes_cancelado': PTEHeader.objects.filter(estatus=4).count(),
+        }
+    ```
+    
+    Dashboard shows:
+    - Total active PTEs
+    - By status (Pendiente, Proceso, Terminado, Cancelado)
+    - Total work orders created
+    - Total production records
+  </Step>
+  
+  <Step title="Apply Filters">
+    Filter by:
+    - Status
+    - Type
+    - Responsible person
+    - Year
+    - Client
+  </Step>
+  
+  <Step title="Export Data">
+    Use DataTable export buttons:
+    - Excel
+    - PDF
+    - Copy to clipboard
+    - Print
+  </Step>
+</Steps>
+
+### Work Order Progress Report
+
+Track work order completion and timeline:
+
+<Card title="Progress Metrics" icon="chart-bar">
+  For each work order, the system calculates:
+  
+  ```python operaciones/views/ote.py
+  # Step completion (30% weight)
+  pasos_completados = detalles.filter(estatus_paso_id=3).count()
+  progreso_pasos = (pasos_completados / total_pasos) * 100
+  
+  # Time progress (70% weight)
+  dias_transcurridos = (today - fecha_inicio).days
+  progreso_tiempo = (dias_transcurridos / plazo_total) * 100
+  
+  # Combined progress
+  progreso_final = (progreso_tiempo * 0.7) + (progreso_pasos * 0.3)
+  ```
+  
+  **Metrics Included**:
+  - Overall progress percentage
+  - Steps completed vs total
+  - Days elapsed vs total
+  - Days remaining
+  - Status (On time, At risk, Delayed)
+</Card>
+
+## Production Reports
+
+### Daily Production Report
+
+Review production by site and day:
+
+<Steps>
+  <Step title="Access Production Module">
+    Go to **Operaciones > Producción**
+  </Step>
+  
+  <Step title="Select Site and Period">
+    Choose work site and month/year
+  </Step>
+  
+  <Step title="View Daily Status Grid">
+    Shows work status for each OT by day:
+    - LABORANDO (working)
+    - STANDBY (on standby)
+    - NO LABORANDO (not working)
+    - CERRADO (locked)
+  </Step>
+  
+  <Step title="Export Daily Report">
+    Export shows:
+    - Work order details
+    - Daily status
+    - Supervisor on duty
+    - Site information
+  </Step>
+</Steps>
+
+### Monthly Production Summary
+
+Consolidated monthly production report:
+
+<Card title="Monthly Report Structure" icon="calendar">
+  **Header Information**:
+  - Site name
+  - Month and year
+  - Work order list
+  - Total authorized values
+  
+  **Detail Section**:
+  - Concept code and description
+  - Unit of measure
+  - Authorized quantity
+  - Executed this month (by day)
+  - Accumulated to date
+  - Remaining authorization
+  - Unit prices (MXN/USD)
+  - Total amounts
+  
+  **GPU Section**:
+  - Generator voucher status
+  - Evidence attachments
+  - Validation status
+  
+  **Financial Summary**:
+  - Total authorized (MXN/USD)
+  - Executed this month (MXN/USD)
+  - Accumulated (MXN/USD)
+  - Remaining (MXN/USD)
+</Card>
+
+### Volume Analysis Report
+
+Track production against authorization:
+
+<Steps>
+  <Step title="Select Work Order">
+    Choose OT to analyze
+  </Step>
+  
+  <Step title="View Authorization">
+    System displays authorized volumes from consolidated family:
+    
+    ```python operaciones/views/produccion.py
+    def obtener_volumenes_consolidados(id_ot, codigos):
+        # Get OT family (initial + reprogramming)
+        id_principal = ot.ot_principal or ot.id
+        familia_ots = OTE.objects.filter(
+            Q(id=id_principal) | Q(ot_principal=id_principal)
+        )
+        
+        # Latest authorization per concept
+        return {p.id_partida: p.volumen_proyectado for p in partidas}
+    ```
+  </Step>
+  
+  <Step title="Review Execution">
+    Report shows:
+    - Historical execution
+    - Current month execution
+    - Total accumulated
+    - Percentage of authorization used
+    - Excess volumes (flagged in red)
+  </Step>
+  
+  <Step title="Export Analysis">
+    Export includes variance analysis and trend charts
+  </Step>
+</Steps>
+
+<Warning>
+  Excess volumes appear in red and are marked with `es_excedente=True` flag. These require special authorization for billing.
+</Warning>
+
+## Financial Reports
+
+### Budget vs Actual Report
+
+<Card title="Financial Comparison" icon="scale-balanced">
+  **Columns**:
+  - Concept description
+  - Authorized quantity
+  - Authorized amount (MXN/USD)
+  - Executed quantity
+  - Executed amount (MXN/USD)
+  - Variance (quantity and amount)
+  - Percentage executed
+  
+  **Grouped By**:
+  - Annex (C-2, C-3, etc.)
+  - Work order
+  - Site
+  - Time period
+</Card>
+
+### Billing Status Report
+
+Track production ready for billing:
+
+<Steps>
+  <Step title="Filter by Status">
+    View production by billing status:
+    - PENDIENTE (pending)
+    - VALIDADO (validated)
+    - FACTURADO (invoiced)
+    - PAGADO (paid)
+  </Step>
+  
+  <Step title="Verify GPU Completion">
+    For C-2/C-3 concepts:
+    
+    ```python operaciones/views/produccion.py
+    # Only production with validated GPUs
+    producciones_facturables = Produccion.objects.filter(
+        id_reporte_mensual=reporte,
+        volumen_produccion__gt=0,
+        es_excedente=False,  # No excess
+        gpu__id_estatus_id=21  # VALIDADO
+    )
+    ```
+  </Step>
+  
+  <Step title="Generate Billing Package">
+    Export includes:
+    - Production volumes
+    - Unit prices
+    - Total amounts
+    - GPU evidence links
+    - Monthly report evidence
+  </Step>
+</Steps>
+
+### Cost Accumulation Report
+
+Track project costs over time:
+
+<Card title="Accumulated Costs" icon="money-bill-trend-up">
+  Report shows:
+  - Initial authorization
+  - Monthly execution
+  - Cumulative total
+  - Remaining budget
+  - Burn rate
+  - Projected completion cost
+  
+  Available views:
+  - By concept
+  - By annex
+  - By work order
+  - By time period
+</Card>
+
+## Activity Reports
+
+### User Activity Log
+
+View all system modifications:
+
+<Steps>
+  <Step title="Access Activity Logs">
+    Navigate to **Configuración > Registro de Actividad**
+  </Step>
+  
+  <Step title="View Log Entries">
+    ```python operaciones/models/registro_actividad_models.py
+    class RegistroActividad(models.Model):
+        registro_id = models.IntegerField()    # Record ID
+        evento = models.TextField()            # Event type (CREATE, UPDATE, DELETE)
+        campo = models.TextField()             # Changed field
+        valor_anterior = models.TextField()    # Old value
+        valor_actual = models.TextField()      # New value
+        afectacion = models.TextField()        # Affected module
+        fecha = models.DateTimeField()         # Timestamp
+        usuario_id = models.ForeignKey(User)   # User who made change
+    ```
+  </Step>
+  
+  <Step title="Filter Logs">
+    Filter by:
+    - User
+    - Event type (CREATE, UPDATE, DELETE)
+    - Module (PTE, OT, Production, etc.)
+    - Date range
+    - Specific record
+  </Step>
+  
+  <Step title="Export Audit Trail">
+    Export filtered logs for compliance or investigation
+  </Step>
+</Steps>
+
+### Change History Report
+
+Track changes to specific records:
+
+<AccordionGroup>
+  <Accordion title="PTE Change History" icon="file-lines">
+    View all modifications to a PTE:
+    - Status changes
+    - Field updates
+    - Step progress
+    - Document uploads
+    - Who made each change and when
+  </Accordion>
+  
+  <Accordion title="Work Order Changes" icon="list-check">
+    Track work order modifications:
+    - Date adjustments
+    - Site changes
+    - Status updates
+    - Financial updates
+  </Accordion>
+  
+  <Accordion title="Production Corrections" icon="pen-to-square">
+    Review production entry history:
+    - Original values
+    - Corrections
+    - Reason for change
+    - Approval status
+  </Accordion>
+</AccordionGroup>
+
+## DataTable Export Features
+
+All list views support multiple export formats:
+
+<CardGroup cols={2}>
+  <Card title="Excel Export" icon="file-excel">
+    Full-featured spreadsheet with:
+    - All columns
+    - Formatting preserved
+    - Formulas where applicable
+    - Ready for analysis
+  </Card>
+  
+  <Card title="PDF Export" icon="file-pdf">
+    Print-ready document:
+    - Professional layout
+    - Company branding
+    - Pagination
+    - Date/time stamp
+  </Card>
+  
+  <Card title="Copy to Clipboard" icon="copy">
+    Quick data transfer:
+    - Tab-delimited format
+    - Paste into any application
+    - Preserves data structure
+  </Card>
+  
+  <Card title="Print" icon="print">
+    Direct printing:
+    - Optimized layout
+    - Page breaks
+    - Headers/footers
+  </Card>
+</CardGroup>
+
+## Custom Reports
+
+For specialized reporting needs:
+
+<Steps>
+  <Step title="Define Requirements">
+    Identify:
+    - Data sources needed
+    - Filters and parameters
+    - Output format
+    - Frequency
+  </Step>
+  
+  <Step title="Request from Administrator">
+    Submit request with:
+    - Report purpose
+    - Required fields
+    - Sample layout
+    - User permissions
+  </Step>
+  
+  <Step title="Test and Refine">
+    Review generated report and provide feedback
+  </Step>
+  
+  <Step title="Schedule (if applicable)">
+    Set up automatic generation:
+    - Daily
+    - Weekly
+    - Monthly
+    - End of period
+  </Step>
+</Steps>
+
+## Report Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Generation" icon="clock">
+    Generate reports on a consistent schedule for trending
+  </Card>
+  
+  <Card title="Verify Data" icon="check-double">
+    Review source data before generating critical reports
+  </Card>
+  
+  <Card title="Archive Reports" icon="box-archive">
+    Save copies of monthly reports for historical reference
+  </Card>
+  
+  <Card title="Share Securely" icon="lock">
+    Use appropriate permissions when sharing sensitive financial reports
+  </Card>
+  
+  <Card title="Document Assumptions" icon="note-sticky">
+    Include notes about filters or date ranges used
+  </Card>
+  
+  <Card title="Cross-Verify" icon="check">
+    Validate critical reports against source documents
+  </Card>
+</CardGroup>
+
+## Scheduled Reports
+
+Some reports are automatically generated:
+
+<Card title="Weekly Summary Email" icon="envelope">
+  Configured in management command:
+  
+  ```python core/management/commands/fn_enviar_reporte_semanal.py
+  # Sends weekly summary to stakeholders
+  # Includes:
+  # - PTEs completed this week
+  # - Work orders progress
+  # - Production highlights
+  # - Upcoming deadlines
+  ```
+  
+  Recipients configured by administrator
+</Card>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Export Not Working" icon="circle-exclamation">
+    **Possible causes**:
+    - Browser blocking pop-ups
+    - Too much data (timeout)
+    - Missing permissions
+    
+    **Solutions**:
+    - Allow pop-ups for this site
+    - Apply filters to reduce data size
+    - Contact administrator for permissions
+  </Accordion>
+  
+  <Accordion title="Incorrect Totals" icon="calculator">
+    **Cause**: Data filtered or date range limited
+    
+    **Solution**: Verify all filters are cleared for full report
+  </Accordion>
+  
+  <Accordion title="Missing Records" icon="magnifying-glass">
+    **Cause**: Records may be inactive (estatus=0) or outside date range
+    
+    **Solution**: Adjust filters or check record status
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Recording Production" icon="industry" href="/guides/recording-production">
+    Learn how production data feeds reports
+  </Card>
+  
+  <Card title="Activity Logs" icon="clock-rotate-left" href="/guides/admin/activity-logs">
+    View detailed activity history
+  </Card>
+</CardGroup>

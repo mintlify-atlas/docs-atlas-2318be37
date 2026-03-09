@@ -1,0 +1,228 @@
+---
+title: Environment Setup
+description: Complete guide to setting up your local development environment for SASCOP BME SubTec
+---
+
+## Prerequisites
+
+Before setting up the SASCOP BME SubTec project, ensure you have the following installed:
+
+<Steps>
+  <Step title="Python 3.8+">
+    Verify Python installation:
+    ```bash
+    python --version
+    ```
+  </Step>
+
+  <Step title="PostgreSQL 12+">
+    Install PostgreSQL database server. The project uses PostgreSQL as its primary database.
+  </Step>
+
+  <Step title="Git">
+    For version control and cloning the repository.
+  </Step>
+
+  <Step title="pip">
+    Python package manager (usually comes with Python).
+  </Step>
+</Steps>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone <repository-url>
+    cd bme_subtec
+    ```
+  </Step>
+
+  <Step title="Create Virtual Environment">
+    Create and activate a Python virtual environment:
+    
+    <CodeGroup>
+    ```bash Linux/Mac
+    python -m venv venv
+    source venv/bin/activate
+    ```
+    
+    ```bash Windows
+    python -m venv venv
+    venv\Scripts\activate
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install all required Python packages from requirements.txt:
+    
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    <Note>
+    This will install Django 4.2.7 and all other dependencies including PostgreSQL drivers, PDF generation libraries, and data processing tools.
+    </Note>
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Create a `.env` file in the project root directory:
+    
+    ```bash
+    touch .env
+    ```
+    
+    Add the following environment variables (see [Environment Variables](/development/deployment/environment-variables) for complete list):
+    
+    ```bash .env
+    # Django Settings
+    SECRET_KEY=your-secret-key-here
+    DEBUG=True
+    
+    # Database Configuration
+    RDS_DB_NAME=sascop_local
+    RDS_USERNAME=postgres
+    RDS_PASSWORD=your-password
+    RDS_HOSTNAME=localhost
+    RDS_PORT=5432
+    
+    # Email Configuration
+    EMAIL_HOST=smtp.gmail.com
+    EMAIL_PORT=587
+    EMAIL_USE_TLS=True
+    EMAIL_HOST_USER=your-email@example.com
+    EMAIL_HOST_PASSWORD=your-app-password
+    ```
+    
+    <Warning>
+    Never commit your `.env` file to version control. It's already included in `.gitignore`.
+    </Warning>
+  </Step>
+
+  <Step title="Set Up Local Database">
+    Create a PostgreSQL database for local development:
+    
+    ```bash
+    createdb sascop_local
+    ```
+    
+    Or using psql:
+    
+    ```sql
+    CREATE DATABASE sascop_local;
+    ```
+  </Step>
+
+  <Step title="Run Migrations">
+    Apply database migrations to create all necessary tables:
+    
+    ```bash
+    python manage.py migrate
+    ```
+  </Step>
+
+  <Step title="Create Superuser">
+    Create an admin user to access the Django admin panel:
+    
+    ```bash
+    python manage.py createsuperuser
+    ```
+    
+    Follow the prompts to set username, email, and password.
+  </Step>
+
+  <Step title="Collect Static Files">
+    Collect all static files for development:
+    
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+  </Step>
+
+  <Step title="Initialize Modules">
+    Run the custom management command to initialize system modules:
+    
+    ```bash
+    python manage.py inicializar_modulos
+    ```
+  </Step>
+</Steps>
+
+## Verify Installation
+
+Run the development server to verify everything is set up correctly:
+
+```bash
+python manage.py runserver
+```
+
+Navigate to `http://localhost:8000` in your browser. You should see the SASCOP application.
+
+<Note>
+The default port is 8000. To use a different port, specify it: `python manage.py runserver 8080`
+</Note>
+
+## Key Dependencies
+
+The project uses the following major dependencies:
+
+| Package | Version | Purpose |
+|---------|---------|----------|
+| Django | 4.2.7 | Web framework |
+| psycopg2-binary | 2.9.7 | PostgreSQL adapter |
+| gunicorn | 21.2.0 | WSGI HTTP server |
+| whitenoise | 6.4.0 | Static file serving |
+| reportlab | 4.0.4 | PDF generation |
+| pandas | 2.3.3 | Data analysis |
+| matplotlib | 3.10.8 | Chart generation |
+| openpyxl | 3.1.5 | Excel file handling |
+| django-anymail | 14.0 | Email backend |
+
+See the complete list in `requirements.txt`.
+
+## Troubleshooting
+
+### PostgreSQL Connection Issues
+
+If you encounter database connection errors:
+
+1. Verify PostgreSQL is running:
+   ```bash
+   sudo systemctl status postgresql
+   ```
+
+2. Check your database credentials in `.env`
+
+3. Ensure the database exists:
+   ```bash
+   psql -l | grep sascop_local
+   ```
+
+### Permission Errors
+
+If you get permission errors during installation:
+
+```bash
+pip install --user -r requirements.txt
+```
+
+### Port Already in Use
+
+If port 8000 is already in use:
+
+```bash
+python manage.py runserver 0.0.0.0:8080
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Configuration" icon="database" href="/development/database-configuration">
+    Learn about database settings and configuration options
+  </Card>
+  
+  <Card title="Running Locally" icon="play" href="/development/running-locally">
+    Start developing with the local development server
+  </Card>
+</CardGroup>

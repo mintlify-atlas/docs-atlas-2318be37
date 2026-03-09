@@ -1,0 +1,356 @@
+---
+title: 'Statistics API'
+description: 'API endpoint for dashboard statistics'
+icon: 'chart-bar'
+---
+
+## Overview
+
+The Statistics API provides aggregated data for dashboard displays, including counts of PTEs, OTEs, production records, and total production volumes.
+
+## Get Statistics
+
+Retrieve dashboard statistics.
+
+**Endpoint:** `GET /operaciones/api/estadisticas/`
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.sascop-bme-subtec.com/operaciones/api/estadisticas/" \
+  -H "Cookie: sessionid=your_session_id"
+```
+
+```python Python
+import requests
+
+session = requests.Session()
+# Assume already logged in
+
+response = session.get(
+    'https://api.sascop-bme-subtec.com/operaciones/api/estadisticas/'
+)
+
+stats = response.json()
+print(f"Total PTEs: {stats['total_ptes']}")
+print(f"Total OTEs: {stats['total_otes']}")
+print(f"Production Records: {stats['total_produccion']}")
+print(f"Total Volume: {stats['volumen_total']}")
+```
+
+```javascript JavaScript
+const response = await axios.get(
+  '/operaciones/api/estadisticas/',
+  { withCredentials: true }
+);
+
+const stats = response.data;
+console.log(`Total PTEs: ${stats.total_ptes}`);
+console.log(`Total OTEs: ${stats.total_otes}`);
+console.log(`Production Records: ${stats.total_produccion}`);
+console.log(`Total Volume: ${stats.volumen_total}`);
+```
+
+```go Go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+type Statistics struct {
+    TotalPtes      int     `json:"total_ptes"`
+    TotalOtes      int     `json:"total_otes"`
+    TotalProduccion int    `json:"total_produccion"`
+    VolumenTotal   float64 `json:"volumen_total"`
+}
+
+func getStatistics(client *http.Client) (*Statistics, error) {
+    resp, err := client.Get("https://api.sascop-bme-subtec.com/operaciones/api/estadisticas/")
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    var stats Statistics
+    if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+        return nil, err
+    }
+    
+    return &stats, nil
+}
+```
+</CodeGroup>
+
+## Response Fields
+
+<ResponseField name="total_ptes" type="integer">
+  Total count of all PTEs in the system
+</ResponseField>
+
+<ResponseField name="total_otes" type="integer">
+  Total count of all OTEs (work orders) in the system
+</ResponseField>
+
+<ResponseField name="total_produccion" type="integer">
+  Total count of production records
+</ResponseField>
+
+<ResponseField name="volumen_total" type="number">
+  Aggregated sum of all production volumes across all records
+</ResponseField>
+
+## Response Example
+
+<ResponseExample>
+```json 200 OK
+{
+  "total_ptes": 45,
+  "total_otes": 128,
+  "total_produccion": 1543,
+  "volumen_total": 25678.50
+}
+```
+
+```json 401 Unauthorized
+{
+  "error": "Authentication required",
+  "redirect": "/accounts/login/"
+}
+```
+</ResponseExample>
+
+## Source Code
+
+**URL Configuration** (`operaciones/urls.py:177`)
+```python
+path('api/estadisticas/', api.api_estadisticas, name='api_estadisticas'),
+```
+
+**View Implementation** (`operaciones/views/api.py:7-24`)
+```python
+@login_required(login_url='/accounts/login/')
+def api_estadisticas(request):
+    """API para estadísticas del dashboard"""
+    total_ptes = PTEHeader.objects.count()
+    total_otes = OTE.objects.count()
+    total_produccion = Produccion.objects.count()
+    
+    from django.db.models import Sum
+    volumen_total = Produccion.objects.aggregate(
+        total=Sum('volumen_produccion')
+    )['total'] or 0
+    
+    return JsonResponse({
+        'total_ptes': total_ptes,
+        'total_otes': total_otes,
+        'total_produccion': total_produccion,
+        'volumen_total': float(volumen_total)
+    })
+```
+
+## Implementation Details
+
+### Database Queries
+
+The endpoint executes the following queries:
+
+1. **Count PTEs**: `PTEHeader.objects.count()`
+2. **Count OTEs**: `OTE.objects.count()`
+3. **Count Production**: `Produccion.objects.count()`
+4. **Sum Volumes**: `Produccion.objects.aggregate(total=Sum('volumen_produccion'))`
+
+### Performance Considerations
+
+<Warning>
+  This endpoint performs **4 database queries** each time it's called. Consider caching the results for frequently accessed dashboards.
+</Warning>
+
+<Tip>
+  **Recommended Caching Strategy:**
+  ```python
+  from django.core.cache import cache
+  
+  def api_estadisticas(request):
+      cache_key = 'dashboard_stats'
+      stats = cache.get(cache_key)
+      
+      if stats is None:
+          # Compute statistics
+          stats = {
+              'total_ptes': PTEHeader.objects.count(),
+              'total_otes': OTE.objects.count(),
+              'total_produccion': Produccion.objects.count(),
+              'volumen_total': float(Produccion.objects.aggregate(
+                  total=Sum('volumen_produccion')
+              )['total'] or 0)
+          }
+          
+          # Cache for 5 minutes
+          cache.set(cache_key, stats, 300)
+      
+      return JsonResponse(stats)
+  ```
+</Tip>
+
+## Use Cases
+
+### Dashboard Display
+
+```javascript React Component
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+
+function DashboardStats() {
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(true);
+  
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        const response = await axios.get('/operaciones/api/estadisticas/', {
+          withCredentials: true
+        });
+        setStats(response.data);
+      } catch (error) {
+        console.error('Failed to fetch statistics:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchStats();
+    
+    // Refresh every 5 minutes
+    const interval = setInterval(fetchStats, 300000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  if (loading) return <div>Loading...</div>;
+  
+  return (
+    <div className="stats-grid">
+      <StatCard title="PTEs" value={stats.total_ptes} />
+      <StatCard title="OTEs" value={stats.total_otes} />
+      <StatCard title="Production Records" value={stats.total_produccion} />
+      <StatCard 
+        title="Total Volume" 
+        value={stats.volumen_total.toFixed(2)} 
+      />
+    </div>
+  );
+}
+```
+
+### CLI Tool
+
+```python Python CLI
+import requests
+import argparse
+from tabulate import tabulate
+
+def get_statistics(session_id):
+    cookies = {'sessionid': session_id}
+    response = requests.get(
+        'https://api.sascop-bme-subtec.com/operaciones/api/estadisticas/',
+        cookies=cookies
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    else:
+        raise Exception(f"Failed to fetch statistics: {response.status_code}")
+
+def main():
+    parser = argparse.ArgumentParser(description='Get SASCOP statistics')
+    parser.add_argument('--session-id', required=True, help='Session ID')
+    args = parser.parse_args()
+    
+    stats = get_statistics(args.session_id)
+    
+    table = [
+        ['Metric', 'Value'],
+        ['Total PTEs', stats['total_ptes']],
+        ['Total OTEs', stats['total_otes']],
+        ['Production Records', stats['total_produccion']],
+        ['Total Volume', f"{stats['volumen_total']:.2f}"]
+    ]
+    
+    print(tabulate(table, headers='firstrow', tablefmt='grid'))
+
+if __name__ == '__main__':
+    main()
+```
+
+### Excel Report Generator
+
+```python
+import requests
+import openpyxl
+from datetime import datetime
+
+def generate_stats_report(session):
+    # Fetch statistics
+    response = session.get(
+        'https://api.sascop-bme-subtec.com/operaciones/api/estadisticas/'
+    )
+    stats = response.json()
+    
+    # Create Excel workbook
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Statistics'
+    
+    # Headers
+    ws['A1'] = 'SASCOP BME SubTec - Statistics Report'
+    ws['A2'] = f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
+    
+    # Data
+    ws['A4'] = 'Metric'
+    ws['B4'] = 'Value'
+    
+    ws['A5'] = 'Total PTEs'
+    ws['B5'] = stats['total_ptes']
+    
+    ws['A6'] = 'Total OTEs'
+    ws['B6'] = stats['total_otes']
+    
+    ws['A7'] = 'Production Records'
+    ws['B7'] = stats['total_produccion']
+    
+    ws['A8'] = 'Total Volume'
+    ws['B8'] = stats['volumen_total']
+    
+    # Save
+    filename = f'stats_report_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+    wb.save(filename)
+    print(f'Report saved: {filename}')
+
+# Usage
+session = requests.Session()
+# ... login ...
+generate_stats_report(session)
+```
+
+## Related Models
+
+<CardGroup cols={3}>
+  <Card title="PTEHeader" icon="file-contract" href="/api/models/pte#pteheader">
+    Technical execution projects
+  </Card>
+  
+  <Card title="OTE" icon="clipboard-list" href="/api/models/ote#ote">
+    Work orders
+  </Card>
+  
+  <Card title="Produccion" icon="chart-line" href="/api/models/production#produccion">
+    Production records
+  </Card>
+</CardGroup>
+
+## Related Endpoints
+
+- [PTE API](/api/pte) - Detailed PTE data
+- [OTE API](/api/ote) - Detailed OTE data
+- [Production API](/api/production) - Production tracking

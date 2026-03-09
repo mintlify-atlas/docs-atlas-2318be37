@@ -1,0 +1,366 @@
+---
+title: 'Query Center Overview'
+description: 'Advanced BI system for searching, analyzing, and reporting operational data across PTEs, OTs, and production'
+icon: 'magnifying-glass-chart'
+---
+
+## Introduction
+
+The Query Center (Centro de Consulta) is a powerful Business Intelligence module that provides:
+
+- **Global Search**: Cross-module document and workflow searching
+- **Interactive Dashboards**: Real-time analytics and KPIs
+- **Excel Reports**: Comprehensive data exports
+- **Email Reports**: Scheduled and on-demand report delivery
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Global Search" icon="magnifying-glass" href="/features/centro-consulta/global-search">
+    Search across PTEs, OTs, and production records with advanced filtering
+  </Card>
+  <Card title="Dashboards" icon="chart-line" href="/features/centro-consulta/dashboards">
+    Visual analytics with charts, KPIs, and status funnels
+  </Card>
+  <Card title="Reports & Export" icon="file-excel" href="/features/centro-consulta/reports-export">
+    Generate Excel reports and email deliveries
+  </Card>
+</CardGroup>
+
+## Architecture
+
+### Data Sources
+
+The Query Center integrates data from three primary sources:
+
+<Tabs>
+  <Tab title="PTE">
+    **Technical-Economic Proposals**
+    
+    Searches PTE headers and detail steps, including:
+    - Client and project leader assignments
+    - Document delivery status
+    - Step completion tracking
+  </Tab>
+  
+  <Tab title="OT">
+    **Work Orders**
+    
+    Searches work orders and their steps:
+    - Site and front assignments
+    - Client and responsible tracking
+    - Step documents and deliverables
+  </Tab>
+  
+  <Tab title="PROD">
+    **Production**
+    
+    Includes two production data types:
+    - **Monthly Reports**: Site-level production summaries
+    - **Unit Price Generators (GPU)**: Technical pricing documents
+  </Tab>
+</Tabs>
+
+### Main View
+
+```python operaciones/views/centro_consulta.py
+@login_required
+@permission_required("operaciones.view_centro_consulta", raise_exception=True)
+def fn_centro_consulta(request):
+   """
+   Vista principal para el dashboard de Business Intelligence (BI).
+   Renderiza el template estático inicialmente.
+   """
+   context = {}
+   return render(request, "operaciones/centro_consulta/centro_consulta.html", context)
+```
+
+<Info>
+  **Permission Required**: Users must have the `operaciones.view_centro_consulta` permission to access the Query Center.
+</Info>
+
+## URL Configuration
+
+```python operaciones/urls.py
+# URLs for Query Center
+path('centro_consulta/centro-consulta/', centro_consulta.fn_centro_consulta, name='centro_consulta'),
+path('centro_consulta/busqueda-global/', centro_consulta.fn_api_busqueda_global, name='api_busqueda_global'),
+path('centro_consulta/documentos-unificados/', centro_consulta.fn_obtener_catalogo_documentos_unificado, name='obtener_documentos_unificados'),
+path('centro_consulta/busqueda-global-graficas/', centro_consulta.fn_api_obtener_dashboard, name='api_busqueda_global_graficas'),
+path("centro_consulta/descargar-excel/", centro_consulta.fn_api_descargar_excel_bi, name="api_descargar_excel_bi"),
+path("centro_consulta/enviar-correo/", centro_consulta.fn_api_enviar_correo_bi, name="api_enviar_correo_bi"),
+path("centro_consulta/catalogos/ots/", centro_consulta.fn_api_obtener_ots_cc, name="api_obtener_ots_cc"),
+path("centro_consulta/catalogos/estatus-cobro/", centro_consulta.fn_api_obtener_estatus_cobro_cc, name="api_obtener_estatus_cobro_cc"),
+path("centro_consulta/catalogos/anexos/", centro_consulta.fn_api_obtener_anexos_cc, name="api_obtener_anexos_cc"),
+path("centro_consulta/catalogos/partidas/", centro_consulta.fn_api_buscar_partidas_cc, name="api_buscar_partidas_cc"),
+path("centro_consulta/busqueda-prod-info/", centro_consulta.fn_api_busqueda_prod_informacion, name="api_busqueda_prod_info"),
+```
+
+## Unified Document Catalog
+
+The Query Center provides a unified view of all document types:
+
+```python operaciones/views/centro_consulta.py
+@login_required
+def fn_obtener_catalogo_documentos_unificado(request):
+    """Get unified catalog of all document types from PTE and OT steps"""
+    try:
+        qs_pte = Paso.objects.filter(activo=True).values("descripcion")
+        qs_ot  = PasoOt.objects.filter(activo=True).values("descripcion")
+        
+        consulta_unificada = qs_pte.union(qs_ot).order_by("descripcion")
+        
+        resultados = [
+            {
+                "id": fila["descripcion"],
+                "descripcion": fila["descripcion"]
+            }
+            for fila in consulta_unificada
+        ]
+        return JsonResponse(resultados, safe=False)
+    except Exception as e:
+        print(f"Error obteniendo catálogo unificado: {str(e)}")
+        return JsonResponse([], safe=False)
+```
+
+<Tip>
+  **Union Query**: Uses Django's `union()` to merge PTE and OT document types into a single searchable catalog.
+</Tip>
+
+## Dynamic Query Construction
+
+The Query Center uses dynamic SQL generation to handle complex multi-source queries:
+
+```python operaciones/views/centro_consulta.py
+def fn_obtener_subconsulta_origenes(lista_origenes):
+    """
+    Arma dinámicamente la subconsulta con solo los bloques necesarios.
+    """
+    bloque_pte = """
+       SELECT
+          pd.id AS id_origen,
+          'PTE' AS tipo,
+          COALESCE(ph.oficio_pte, 'SIN FOLIO') AS folio,
+          COALESCE(c.descripcion, 'CLIENTE NO ASIGNADO') AS cliente,
+          COALESCE(rp.descripcion, 'SIN LÍDER') AS lider,
+          'N/A' AS frente,
+          NULL::integer AS id_sitio_oficial,
+          'NO APLICA' AS sitio_oficial,
+          ...
+       FROM pte_detalle pd
+       INNER JOIN pte_header ph ON pd.id_pte_header_id = ph.id
+       LEFT JOIN cliente c ON ph.id_cliente_id = c.id
+       LEFT JOIN responsable_proyecto rp ON ph.id_responsable_proyecto_id = rp.id
+       ...
+       WHERE ph.estatus != 0
+    """
+
+    bloque_ot = """
+       SELECT
+          od.id AS id_origen,
+          'OT' AS tipo,
+          COALESCE(o.orden_trabajo, 'SIN OT') AS folio,
+          ...
+       FROM ot_detalle od
+       INNER JOIN ot o ON od.id_ot_id = o.id
+       ...
+       WHERE o.estatus = 1
+    """
+
+    # Dynamically include only requested data sources
+    subconsultas = []
+    origenes_validos = lista_origenes if lista_origenes else ["PTE", "OT"]
+
+    if "PTE" in origenes_validos:
+        subconsultas.append(bloque_pte)
+    if "OT" in origenes_validos:
+        subconsultas.append(bloque_ot)
+    if "PROD" in origenes_validos:
+        subconsultas.append(bloque_prod_reportes)
+        subconsultas.append(bloque_prod_gpu)
+
+    return " UNION ALL ".join(subconsultas)
+```
+
+<AccordionGroup>
+  <Accordion title="Why Dynamic SQL?" icon="code">
+    Dynamic SQL construction provides:
+    
+    1. **Performance**: Only queries selected data sources
+    2. **Flexibility**: Easily add new data sources
+    3. **Maintainability**: Clear separation of source logic
+    4. **Optimization**: Database can optimize smaller unions
+  </Accordion>
+</AccordionGroup>
+
+## Filter Architecture
+
+The WHERE clause is constructed dynamically based on active filters:
+
+```python operaciones/views/centro_consulta.py
+def fn_construir_where_dinamico(filtros):
+    """
+    Construye dinámicamente la cláusula WHERE y su diccionario de parámetros.
+    Retorna una tupla (clausula_where_str, params_dict).
+    """
+    lista_lideres    = filtros.get("lideres_id", [])
+    lista_clientes   = filtros.get("clientes_id", [])
+    lista_frentes    = filtros.get("frentes_id", [])
+    lista_sitios     = filtros.get("sitios_id", [])
+    lista_documentos = filtros.get("nombres_doc", [])
+    lista_estatus    = filtros.get("estatus_proceso_id", [])
+    lista_ots        = filtros.get("ots_id", [])
+
+    fecha_ini_input = filtros.get("fecha_inicio")
+    fecha_fin_input = filtros.get("fecha_fin")
+    texto_busqueda  = filtros.get("texto_busqueda", "")
+
+    check_entregados = filtros.get("check_entregados")
+    check_pendientes = filtros.get("check_no_entregados")
+
+    condiciones = []
+    params = {}
+
+    # Build filter conditions
+    if lista_ots:
+        condiciones.append("T.folio IN %(ids_ots)s")
+        params["ids_ots"] = tuple(lista_ots)
+
+    if lista_lideres:
+        condiciones.append("T._fid_lider::text IN %(ids_lideres)s")
+        params["ids_lideres"] = tuple(lista_lideres)
+
+    if lista_clientes:
+        condiciones.append("T._fid_cliente::text IN %(ids_clientes)s")
+        params["ids_clientes"] = tuple(lista_clientes)
+
+    # ... additional filter logic
+
+    if condiciones:
+        clausula_where = "WHERE\n         " + "\n         AND ".join(condiciones)
+    else:
+        clausula_where = ""
+
+    return clausula_where, params
+```
+
+## Core SQL Utility
+
+The Query Center uses a utility function for executing parameterized SQL:
+
+```python core/utils.py (reference)
+def ejecutar_query_sql(sql, params):
+    """Execute SQL with parameters and return results as list of dicts"""
+    with connection.cursor() as cursor:
+        cursor.execute(sql, params)
+        columns = [col[0] for col in cursor.description]
+        return [
+            dict(zip(columns, row))
+            for row in cursor.fetchall()
+        ]
+
+def fn_ejecutar_query_sql_lotes(sql, params):
+    """Execute SQL in batches for large result sets"""
+    # Batch processing implementation for memory efficiency
+    ...
+```
+
+<Warning>
+  **SQL Injection Prevention**: Always use parameterized queries with `%(param_name)s` placeholders. Never interpolate user input directly into SQL strings.
+</Warning>
+
+## Site Resolution Logic
+
+Work orders can have sites in different fields (patio, embarcación, plataforma) based on front type:
+
+```python operaciones/views/centro_consulta.py (excerpt)
+CASE
+    WHEN o.id_frente_id = 1  -- Patio
+        THEN o.id_patio
+    WHEN o.id_frente_id = 2  -- Vessel
+        THEN o.id_embarcacion
+    WHEN o.id_frente_id = 4  -- Platform
+        THEN o.id_plataforma
+    ELSE NULL
+END AS id_sitio_oficial,
+
+CASE
+    WHEN o.id_frente_id = 1
+        THEN COALESCE(s_pat.descripcion, 'SIN PATIO')
+    WHEN o.id_frente_id = 2
+        THEN COALESCE(s_emb.descripcion, 'SIN EMBARCACION')
+    WHEN o.id_frente_id = 4
+        THEN COALESCE(s_plat.descripcion, 'SIN PLATAFORMA')
+    ELSE 'SIN UBICACIÓN'
+END AS sitio_oficial
+```
+
+## File Status Detection
+
+Documents are classified as delivered or pending based on file field content:
+
+```python operaciones/views/centro_consulta.py
+CASE
+    WHEN T.archivo IS NOT NULL AND LENGTH(TRIM(T.archivo)) > 5
+        THEN 'ENTREGADO'
+    WHEN T._fid_estatus_paso = 14
+        THEN 'NO APLICA'
+    ELSE 'PENDIENTE'
+END AS "Estado Archivo"
+```
+
+<Info>
+  **File Validation**: Files are considered valid if the `archivo` field has more than 5 characters (excluding whitespace), filtering out placeholder values.
+</Info>
+
+## Performance Considerations
+
+<Steps>
+  <Step title="Index Usage">
+    Key fields are indexed for optimal query performance:
+    ```python
+    class Meta:
+        indexes = [
+            models.Index(fields=['partida_ordinaria']),
+            models.Index(fields=['sub_anexo']),
+        ]
+    ```
+  </Step>
+  
+  <Step title="Selective Joins">
+    Use `LEFT JOIN` for optional relationships:
+    ```sql
+    LEFT JOIN cliente c ON ph.id_cliente_id = c.id
+    LEFT JOIN responsable_proyecto rp ON ph.id_responsable_proyecto_id = rp.id
+    ```
+  </Step>
+  
+  <Step title="Batch Processing">
+    Large result sets use `fn_ejecutar_query_sql_lotes()` for memory-efficient streaming.
+  </Step>
+  
+  <Step title="Pagination">
+    All DataTable APIs implement offset/limit pagination:
+    ```python
+    resultados_paginados = ejecutar_query_sql(sql_datos, params)
+    # SQL includes: LIMIT %(limite_bd)s OFFSET %(salto_bd)s
+    ```
+  </Step>
+</Steps>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Global Search" icon="magnifying-glass" href="/features/centro-consulta/global-search">
+    Detailed search API documentation
+  </Card>
+  <Card title="Dashboards" icon="chart-mixed" href="/features/centro-consulta/dashboards">
+    Analytics and visualization guide
+  </Card>
+  <Card title="Reports & Export" icon="file-export" href="/features/centro-consulta/reports-export">
+    Excel generation and email delivery
+  </Card>
+  <Card title="Catalogs" icon="database" href="/features/catalogs/overview">
+    Master data used in queries
+  </Card>
+</CardGroup>

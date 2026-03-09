@@ -1,0 +1,514 @@
+---
+title: 'Production Models'
+description: 'Data models for production tracking and reporting'
+icon: 'database'
+---
+
+## Overview
+
+Production models manage daily production tracking, monthly reports, GPU (Unit Price Generators) tracking, schedule management, and estimations.
+
+## Produccion
+
+Main model for production records.
+
+**Source:** `operaciones/models/produccion_models.py:63-88`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="id_partida_anexo" type="ForeignKey" required>
+  Reference to PartidaAnexoImportada
+</ParamField>
+
+<ParamField path="id_reporte_mensual" type="ForeignKey" required>
+  Reference to ReporteMensual
+</ParamField>
+
+<ParamField path="fecha_produccion" type="date" required>
+  Date when production occurred
+</ParamField>
+
+<ParamField path="volumen_produccion" type="decimal" required>
+  Volume produced (15 digits, 6 decimals)
+</ParamField>
+
+<ParamField path="tipo_tiempo" type="string" required>
+  Time type:
+  - **TE**: Tiempo Efectivo (Effective Time)
+  - **CMA**: Costo Mínimo Aplicado (Minimum Applied Cost)
+</ParamField>
+
+<ParamField path="es_excedente" type="boolean" default="false">
+  Whether this is excess production
+</ParamField>
+
+<ParamField path="id_estatus_cobro" type="ForeignKey" required>
+  Reference to Estatus (nivel_afectacion: 3)
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional comments
+</ParamField>
+
+<ParamField path="id_sitio_produccion" type="ForeignKey">
+  Reference to Sitio where production occurred
+</ParamField>
+
+### Model Definition
+
+```python
+class Produccion(models.Model):
+    TIPO_TIEMPO_CHOICES = [
+        ('TE', 'Tiempo Efectivo'),
+        ('CMA', 'Costo Mínimo Aplicado'),
+    ]
+    
+    id_partida_anexo = models.ForeignKey(PartidaAnexoImportada, 
+                                        on_delete=models.PROTECT, 
+                                        related_name='registros_produccion', 
+                                        blank=True, null=True)
+    id_reporte_mensual = models.ForeignKey(ReporteMensual, 
+                                          on_delete=models.CASCADE, 
+                                          related_name='producciones', 
+                                          blank=True, null=True)
+    fecha_produccion = models.DateField()
+    volumen_produccion = models.DecimalField(max_digits=15, decimal_places=6)
+    tipo_tiempo = models.CharField(max_length=3, choices=TIPO_TIEMPO_CHOICES, 
+                                   blank=True, null=True)
+    es_excedente = models.BooleanField(default=False)
+    id_estatus_cobro = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                        limit_choices_to={'nivel_afectacion': 3})
+    comentario = models.TextField(blank=True)
+    id_sitio_produccion = models.ForeignKey(Sitio, on_delete=models.SET_NULL, 
+                                           null=True, blank=True)
+
+    class Meta:
+        db_table = 'produccion'
+        unique_together = ['id_partida_anexo', 'fecha_produccion', 
+                          'tipo_tiempo', 'id_sitio_produccion']
+        indexes = [
+            models.Index(fields=['fecha_produccion']),
+            models.Index(fields=['id_partida_anexo']),
+            models.Index(fields=['tipo_tiempo'])
+        ]
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Produccion
+from decimal import Decimal
+
+# Create production record
+produccion = Produccion.objects.create(
+    id_partida_anexo_id=1,
+    id_reporte_mensual_id=1,
+    fecha_produccion='2024-03-15',
+    volumen_produccion=Decimal('25.500000'),
+    tipo_tiempo='TE',
+    id_estatus_cobro_id=1,
+    id_sitio_produccion_id=1,
+    comentario='Producción normal'
+)
+
+# Query production by date range
+from datetime import date
+productions = Produccion.objects.filter(
+    fecha_produccion__gte=date(2024, 3, 1),
+    fecha_produccion__lte=date(2024, 3, 31)
+).select_related('id_partida_anexo', 'id_sitio_produccion')
+
+# Calculate totals
+from django.db.models import Sum
+total_volume = Produccion.objects.filter(
+    id_reporte_mensual_id=1
+).aggregate(total=Sum('volumen_produccion'))['total']
+```
+
+## ReporteMensual
+
+Monthly report container for production data.
+
+**Source:** `operaciones/models/produccion_models.py:22-42`
+
+### Model Definition
+
+```python
+class ReporteMensual(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, 
+                             related_name='reportes_mensuales', 
+                             blank=True, null=True)
+    mes = models.IntegerField(help_text="Mes numérico (1-12)")
+    anio = models.IntegerField(help_text="Año (Ej. 2025)")
+    archivo = models.URLField(blank=True, null=True, 
+                             verbose_name="Link Evidencia (Drive)")
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                  limit_choices_to={'nivel_afectacion': 5}, 
+                                  default=1, 
+                                  verbose_name="Estatus Cierre")
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporte_mensual_header'
+        unique_together = ['id_ot', 'mes', 'anio']
+```
+
+### Example Usage
+
+```python
+from operaciones.models import ReporteMensual
+
+# Create or get monthly report
+reporte, created = ReporteMensual.objects.get_or_create(
+    id_ot_id=1,
+    mes=3,
+    anio=2024,
+    defaults={'id_estatus_id': 1}
+)
+
+# Update with evidence link
+reporte.archivo = 'https://drive.google.com/file/d/...'
+reporte.id_estatus_id = 2  # Closed
+reporte.save()
+
+# Get all production for a month
+productions = reporte.producciones.all().select_related('id_partida_anexo')
+total = sum(p.volumen_produccion for p in productions)
+```
+
+## ReporteDiario
+
+Daily operational status tracking.
+
+**Source:** `operaciones/models/produccion_models.py:44-61`
+
+### Model Definition
+
+```python
+class ReporteDiario(models.Model):
+    id_reporte_mensual = models.ForeignKey(ReporteMensual, 
+                                          on_delete=models.CASCADE, 
+                                          related_name='dias_estatus', 
+                                          blank=True, null=True)
+    fecha = models.DateField()
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                  limit_choices_to={'nivel_afectacion': 6}, 
+                                  default=1, 
+                                  verbose_name="Estatus Operativo")
+    comentario = models.CharField(max_length=255, blank=True, null=True, 
+                                 help_text="Observación breve del día")
+    bloqueado = models.BooleanField(default=False)
+    id_sitio = models.ForeignKey(Sitio, on_delete=models.CASCADE, 
+                                null=True, blank=True)
+    
+    class Meta:
+        db_table = 'reporte_diario_detalle'
+        unique_together = ['id_reporte_mensual', 'fecha', 'id_sitio']
+        indexes = [models.Index(fields=['fecha'])]
+```
+
+### Example Usage
+
+```python
+from operaciones.models import ReporteDiario
+
+# Create daily report
+ReporteDiario.objects.create(
+    id_reporte_mensual_id=1,
+    fecha='2024-03-15',
+    id_estatus_id=1,  # Operativo
+    id_sitio_id=1,
+    comentario='Operaciones normales'
+)
+
+# Bulk create for entire month
+from datetime import date, timedelta
+
+start_date = date(2024, 3, 1)
+reports = []
+for day in range(31):
+    reports.append(ReporteDiario(
+        id_reporte_mensual_id=1,
+        fecha=start_date + timedelta(days=day),
+        id_estatus_id=1,
+        id_sitio_id=1
+    ))
+ReporteDiario.objects.bulk_create(reports, ignore_conflicts=True)
+```
+
+## RegistroGPU
+
+GPU (Unit Price Generators) tracking for administrative verification.
+
+**Source:** `operaciones/models/produccion_models.py:90-104`
+
+### Model Definition
+
+```python
+class RegistroGPU(models.Model):
+    id_produccion = models.OneToOneField(Produccion, on_delete=models.CASCADE, 
+                                        related_name='gpu')
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                  limit_choices_to={'nivel_afectacion': 6}, 
+                                  verbose_name="Estatus GPU")
+    archivo = models.URLField(max_length=500, blank=True, null=True, 
+                             verbose_name="Link Evidencia Fotográfica")
+    nota_bloqueo = models.TextField(blank=True, verbose_name="Observaciones", 
+                                   null=True)
+    id_estimacion_detalle = models.ForeignKey('EstimacionDetalle', 
+                                             on_delete=models.SET_NULL, 
+                                             null=True, blank=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'registro_generadores_pu'
+```
+
+<Info>
+  **GPU Records** are only created for C-2 and C-3 annexes that require photographic evidence and administrative tracking.
+</Info>
+
+### Example Usage
+
+```python
+from operaciones.models import RegistroGPU
+
+# Create GPU record for production
+gpu = RegistroGPU.objects.create(
+    id_produccion_id=1,
+    id_estatus_id=1,
+    archivo='https://drive.google.com/file/d/...',
+    nota_bloqueo='Evidencia fotográfica adjunta'
+)
+
+# Update GPU status
+gpu.id_estatus_id = 2  # Approved
+gpu.save()
+
+# Query GPUs pending approval
+pending_gpus = RegistroGPU.objects.filter(
+    id_estatus__descripcion='Pendiente'
+).select_related('id_produccion', 'id_produccion__id_partida_anexo')
+```
+
+## Producto
+
+Catalog of products (partidas).
+
+**Source:** `operaciones/models/produccion_models.py:5-20`
+
+### Model Definition
+
+```python
+class Producto(models.Model):
+    id_partida = models.CharField(max_length=100)
+    descripcion_concepto = models.TextField(null=True, blank=True)
+    anexo = models.CharField(max_length=100, blank=True, null=True)
+    id_sitio = models.ForeignKey(Sitio, on_delete=models.CASCADE, 
+                                limit_choices_to={'nivel_afectacion': 1}, 
+                                null=True, blank=True)
+    id_tipo_partida = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                       limit_choices_to={'nivel_afectacion': 3})
+    id_unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE)
+    precio_unitario_mn = models.DecimalField(max_digits=15, decimal_places=2, 
+                                            null=True, blank=True)
+    precio_unitario_usd = models.DecimalField(max_digits=15, decimal_places=2, 
+                                             null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'producto'
+```
+
+## Estimacion Models
+
+Estimation tracking for billing.
+
+### EstimacionHeader
+
+```python
+class EstimacionHeader(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE)
+    fecha_estimacion = models.DateField()
+    fecha_desde = models.DateField()
+    fecha_hasta = models.DateField()
+    id_estatus_cobro = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                        limit_choices_to={'nivel_afectacion': 3})
+    total_volumen_producido = models.DecimalField(max_digits=15, 
+                                                  decimal_places=2, default=0)
+    total_volumen_estimado = models.DecimalField(max_digits=15, 
+                                                 decimal_places=2, default=0)
+    total_importe_mn = models.DecimalField(max_digits=15, decimal_places=2, 
+                                          default=0)
+    total_importe_usd = models.DecimalField(max_digits=15, decimal_places=2, 
+                                           default=0)
+    comentario = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'estimacion_header'
+```
+
+### EstimacionDetalle
+
+```python
+class EstimacionDetalle(models.Model):
+    id_estimacion_header = models.ForeignKey(EstimacionHeader, 
+                                            on_delete=models.CASCADE, 
+                                            related_name='detalles')
+    id_produccion = models.ForeignKey(Produccion, on_delete=models.CASCADE)
+    volumen_actual = models.DecimalField(max_digits=15, decimal_places=2)
+    volumen_estimado = models.DecimalField(max_digits=15, decimal_places=2, 
+                                          default=0)
+    id_estatus_cobro = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                        limit_choices_to={'nivel_afectacion': 3})
+    comentario_ajuste = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'estimacion_detalle'
+```
+
+## Cronograma (Schedule) Models
+
+### CronogramaVersion
+
+MS Project file import tracking.
+
+**Source:** `operaciones/models/produccion_models.py:165-178`
+
+```python
+class CronogramaVersion(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, 
+                             related_name='cronogramas')
+    nombre_version = models.CharField(max_length=150)
+    archivo_mpp = models.FileField(upload_to='operaciones/mpps/')
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    es_activo = models.BooleanField(default=True)
+    fecha_inicio_proyecto = models.DateField(null=True, blank=True)
+    fecha_fin_proyecto = models.DateField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'importacion_cronograma'
+```
+
+### TareaCronograma
+
+Individual tasks from MS Project.
+
+**Source:** `operaciones/models/produccion_models.py:180-201`
+
+```python
+class TareaCronograma(models.Model):
+    version = models.ForeignKey(CronogramaVersion, on_delete=models.CASCADE, 
+                               related_name='tareas')
+    uid_project = models.IntegerField() 
+    id_project = models.IntegerField() 
+    wbs = models.CharField(max_length=50) 
+    nombre = models.CharField(max_length=500)
+    nivel_esquema = models.IntegerField(default=0) 
+    es_resumen = models.BooleanField(default=False) 
+    padre_uid = models.IntegerField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True)
+    fecha_fin = models.DateField(null=True)
+    duracion_dias = models.DecimalField(max_digits=10, decimal_places=2, 
+                                       default=0)
+    porcentaje_mpp = models.DecimalField(max_digits=5, decimal_places=2, 
+                                        default=0)
+    porcentaje_completado = models.DecimalField(max_digits=5, decimal_places=2, 
+                                               default=0)
+    recursos = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'importacion_cronograma_tarea'
+        indexes = [models.Index(fields=['version', 'uid_project'])]
+```
+
+### AvanceCronograma
+
+Real vs client progress tracking.
+
+```python
+class AvanceCronograma(models.Model):
+    tarea = models.OneToOneField(TareaCronograma, on_delete=models.CASCADE, 
+                                related_name='avance')
+    porcentaje_real = models.DecimalField(max_digits=5, decimal_places=2, 
+                                         default=0)
+    porcentaje_cliente = models.DecimalField(max_digits=5, decimal_places=2, 
+                                            default=0)
+    comentario = models.TextField(blank=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'importacion_cronograma_avance'
+```
+
+## Superintendent Models
+
+### Superintendente
+
+```python
+class Superintendente(models.Model):
+    nombre = models.CharField(max_length=150)
+    sitio_asignado = models.ForeignKey('Sitio', on_delete=models.SET_NULL, 
+                                      null=True, blank=True)
+    color = models.CharField(max_length=7, default="#3498db")
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'superintendente'
+```
+
+### CicloGuardia
+
+```python
+class CicloGuardia(models.Model):
+    sitio = models.OneToOneField('Sitio', on_delete=models.CASCADE)
+    super_a = models.ForeignKey(Superintendente, on_delete=models.CASCADE, 
+                               related_name='ciclos_a')
+    super_b = models.ForeignKey(Superintendente, on_delete=models.CASCADE, 
+                               related_name='ciclos_b')
+    fecha_inicio_super_a = models.DateField(
+        help_text="Fecha en que inició guardia el Super A"
+    )
+
+    class Meta:
+        db_table = 'guardias'
+```
+
+## Database Indexes
+
+Production tables include these indexes for performance:
+
+```python
+# Produccion indexes
+models.Index(fields=['fecha_produccion'])
+models.Index(fields=['id_partida_anexo'])
+models.Index(fields=['tipo_tiempo'])
+
+# ReporteDiario indexes
+models.Index(fields=['fecha'])
+
+# TareaCronograma indexes
+models.Index(fields=['version', 'uid_project'])
+```
+
+## Related Documentation
+
+<CardGroup cols={3}>
+  <Card title="Production API" icon="chart-line" href="/api/production">
+    API endpoints
+  </Card>
+  
+  <Card title="OTE Models" icon="clipboard-list" href="/api/models/ote">
+    Work order models
+  </Card>
+  
+  <Card title="Catalog Models" icon="book" href="/api/models/catalogs">
+    Supporting catalogs
+  </Card>
+</CardGroup>

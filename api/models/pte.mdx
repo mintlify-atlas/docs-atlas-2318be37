@@ -1,0 +1,430 @@
+---
+title: 'PTE Models'
+description: 'Data models for Technical Execution Projects'
+icon: 'database'
+---
+
+## Overview
+
+PTE (Proyecto Técnico de Ejecución) models manage the complete lifecycle of technical execution projects, from request through completion.
+
+## PTEHeader
+
+Main model for Technical Execution Projects.
+
+**Source:** `operaciones/models/pte_models.py:19-49`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="id_tipo" type="ForeignKey" required>
+  Reference to Tipo model (nivel_afectacion: 1)
+</ParamField>
+
+<ParamField path="oficio_pte" type="string" required>
+  Official PTE document number (max 100 chars)
+</ParamField>
+
+<ParamField path="oficio_solicitud" type="string" required>
+  Request document number (max 100 chars)
+</ParamField>
+
+<ParamField path="descripcion_trabajo" type="text" required>
+  Detailed description of work to be performed
+</ParamField>
+
+<ParamField path="fecha_solicitud" type="date">
+  Date when PTE was requested
+</ParamField>
+
+<ParamField path="fecha_entrega" type="date">
+  Delivery deadline date
+</ParamField>
+
+<ParamField path="plazo_dias" type="float" required>
+  Deadline in days
+</ParamField>
+
+<ParamField path="id_orden_trabajo" type="string">
+  Associated work order number (max 100 chars)
+</ParamField>
+
+<ParamField path="id_responsable_proyecto" type="ForeignKey">
+  Reference to ResponsableProyecto model
+</ParamField>
+
+<ParamField path="total_homologado" type="decimal" default="0">
+  Homologated total amount (15 digits, 2 decimals)
+</ParamField>
+
+<ParamField path="estatus" type="integer" default="1">
+  PTE status:
+  - **1**: Activo (Active)
+  - **2**: En Proceso (In Process)
+  - **3**: Terminado (Completed)
+  - **4**: Cancelado (Cancelled)
+</ParamField>
+
+<ParamField path="prioridad" type="integer">
+  Priority level
+</ParamField>
+
+<ParamField path="id_cliente" type="ForeignKey">
+  Reference to Cliente model
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional comments
+</ParamField>
+
+### Model Definition
+
+```python
+class PTEHeader(models.Model):
+    ESTATUS_CHOICES = [
+        (1, 'Activo'),
+        (2, 'En Proceso'),
+        (3, 'Terminado'),
+        (4, 'Cancelado'),
+    ]
+    
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                 limit_choices_to={'nivel_afectacion': 1})
+    oficio_pte = models.CharField(max_length=100)
+    oficio_solicitud = models.CharField(max_length=100)
+    descripcion_trabajo = models.TextField()
+    fecha_solicitud = models.DateField(blank=True, null=True)
+    fecha_entrega = models.DateField(blank=True, null=True)
+    plazo_dias = models.FloatField()
+    id_orden_trabajo = models.CharField(max_length=100, blank=True, null=True)
+    id_responsable_proyecto = models.ForeignKey(ResponsableProyecto, 
+                                                on_delete=models.CASCADE, 
+                                                blank=True, null=True)
+    total_homologado = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    estatus = models.IntegerField(choices=ESTATUS_CHOICES, default=1)
+    prioridad = models.IntegerField(blank=True, null=True)
+    id_cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, 
+                                   blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'pte_header'
+        permissions = [
+            ("view_centro_consulta", "Puede visualizar el centro de consulta"),
+        ]
+```
+
+### Relationships
+
+<ResponseField name="detalles" type="reverse ForeignKey">
+  Related PTEDetalle records (one-to-many)
+</ResponseField>
+
+<ResponseField name="otes" type="reverse ForeignKey">
+  OTEs created from this PTE
+</ResponseField>
+
+### Example Usage
+
+```python
+from operaciones.models import PTEHeader, PTEDetalle
+
+# Create a new PTE
+pte = PTEHeader.objects.create(
+    id_tipo_id=1,
+    oficio_pte="PTE-2024-001",
+    oficio_solicitud="SOL-2024-001",
+    descripcion_trabajo="Inspección de estructura submarina",
+    fecha_solicitud="2024-01-15",
+    plazo_dias=30,
+    estatus=1,
+    id_cliente_id=1
+)
+
+# Query PTEs
+active_ptes = PTEHeader.objects.filter(estatus=1)
+in_process = PTEHeader.objects.filter(estatus=2).order_by('-fecha_solicitud')
+
+# Get PTE with details
+pte = PTEHeader.objects.prefetch_related('detalles').get(id=1)
+for detalle in pte.detalles.all():
+    print(f"{detalle.id_paso.descripcion}: {detalle.estatus_paso.descripcion}")
+```
+
+## PTEDetalle
+
+Tracks individual steps within a PTE.
+
+**Source:** `operaciones/models/pte_models.py:51-66`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="id_pte_header" type="ForeignKey" required>
+  Reference to PTEHeader (related_name: 'detalles')
+</ParamField>
+
+<ParamField path="estatus_paso" type="ForeignKey" required>
+  Reference to Estatus model (nivel_afectacion: 4)
+</ParamField>
+
+<ParamField path="id_paso" type="ForeignKey" required>
+  Reference to Paso model
+</ParamField>
+
+<ParamField path="fecha_entrega" type="date">
+  Delivery date for this step
+</ParamField>
+
+<ParamField path="fecha_inicio" type="date">
+  Start date for this step
+</ParamField>
+
+<ParamField path="fecha_termino" type="date">
+  Completion date for this step
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Comments about the step
+</ParamField>
+
+<ParamField path="archivo" type="text">
+  File reference or URL
+</ParamField>
+
+### Model Definition
+
+```python
+class PTEDetalle(models.Model):
+    id_pte_header = models.ForeignKey(PTEHeader, on_delete=models.CASCADE, 
+                                       related_name='detalles')
+    estatus_paso = models.ForeignKey(Estatus, on_delete=models.CASCADE, 
+                                     limit_choices_to={'nivel_afectacion': 4})
+    id_paso = models.ForeignKey(Paso, on_delete=models.CASCADE)
+    fecha_entrega = models.DateField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    comentario = models.TextField(blank=True, null=True)
+    archivo = models.TextField(blank=True, null=True)
+
+    class Meta:
+        db_table = 'pte_detalle'
+        ordering = ['id_paso__orden']
+```
+
+### Example Usage
+
+```python
+from operaciones.models import PTEDetalle, Paso, Estatus
+
+# Create step detail
+detalle = PTEDetalle.objects.create(
+    id_pte_header_id=1,
+    id_paso_id=1,
+    estatus_paso_id=1,
+    fecha_entrega="2024-02-15",
+    comentario="Iniciando revisión de documentación"
+)
+
+# Query by PTE
+detalles = PTEDetalle.objects.filter(
+    id_pte_header_id=1
+).select_related('id_paso', 'estatus_paso')
+
+# Update step status
+detalle.estatus_paso_id = 2  # Completed
+detalle.fecha_termino = "2024-02-10"
+detalle.save()
+
+# Get completion percentage
+total_steps = pte.detalles.count()
+completed_steps = pte.detalles.filter(
+    estatus_paso__descripcion='Completado'
+).count()
+percentage = (completed_steps / total_steps) * 100
+```
+
+## Paso
+
+Defines steps that can be used in PTEs.
+
+**Source:** `operaciones/models/pte_models.py:4-17`
+
+### Fields
+
+<ParamField path="id" type="integer" required>
+  Auto-generated primary key
+</ParamField>
+
+<ParamField path="descripcion" type="string" required>
+  Step description (max 200 chars)
+</ParamField>
+
+<ParamField path="orden" type="string">
+  Sort order (max 10 chars)
+</ParamField>
+
+<ParamField path="activo" type="boolean" default="true">
+  Whether step is active
+</ParamField>
+
+<ParamField path="importancia" type="float" default="0">
+  Importance weight for progress calculation
+</ParamField>
+
+<ParamField path="tipo" type="integer" default="1">
+  Step type classification
+</ParamField>
+
+<ParamField path="comentario" type="text">
+  Additional notes about the step
+</ParamField>
+
+<ParamField path="id_tipo_cliente" type="ForeignKey">
+  Reference to Tipo for client classification
+</ParamField>
+
+### Model Definition
+
+```python
+class Paso(models.Model):
+    descripcion = models.CharField(max_length=200)
+    orden = models.CharField(blank=True, null=True, max_length=10)
+    activo = models.BooleanField(default=True)
+    importancia = models.FloatField(default=0)
+    tipo = models.IntegerField(blank=True, null=True, default=1)
+    comentario = models.TextField(blank=True, null=True)
+    id_tipo_cliente = models.ForeignKey(Tipo, on_delete=models.CASCADE, 
+                                        null=True, blank=True)
+    
+    class Meta:
+        db_table = 'paso'
+        ordering = ['orden']
+
+    def __str__(self):
+        return f"{self.orden}. {self.descripcion}"
+```
+
+### Example Usage
+
+```python
+from operaciones.models import Paso
+
+# Create steps
+Paso.objects.create(
+    descripcion="Revisión de documentación técnica",
+    orden="1",
+    importancia=0.2,
+    activo=True
+)
+
+Paso.objects.create(
+    descripcion="Inspección en sitio",
+    orden="2",
+    importancia=0.5,
+    activo=True
+)
+
+# Query active steps
+active_steps = Paso.objects.filter(activo=True).order_by('orden')
+
+# Get steps for specific client type
+client_steps = Paso.objects.filter(
+    id_tipo_cliente_id=1,
+    activo=True
+).order_by('orden')
+```
+
+## Database Schema
+
+### pte_header Table
+
+```sql
+CREATE TABLE pte_header (
+    id SERIAL PRIMARY KEY,
+    id_tipo_id INTEGER NOT NULL REFERENCES tipo(id),
+    oficio_pte VARCHAR(100) NOT NULL,
+    oficio_solicitud VARCHAR(100) NOT NULL,
+    descripcion_trabajo TEXT NOT NULL,
+    fecha_solicitud DATE,
+    fecha_entrega DATE,
+    plazo_dias DOUBLE PRECISION NOT NULL,
+    id_orden_trabajo VARCHAR(100),
+    id_responsable_proyecto_id INTEGER REFERENCES responsable_proyecto(id),
+    total_homologado DECIMAL(15, 2) DEFAULT 0,
+    estatus INTEGER DEFAULT 1,
+    prioridad INTEGER,
+    id_cliente_id INTEGER REFERENCES cliente(id),
+    comentario TEXT
+);
+```
+
+### pte_detalle Table
+
+```sql
+CREATE TABLE pte_detalle (
+    id SERIAL PRIMARY KEY,
+    id_pte_header_id INTEGER NOT NULL REFERENCES pte_header(id) ON DELETE CASCADE,
+    estatus_paso_id INTEGER NOT NULL REFERENCES cat_estatus(id),
+    id_paso_id INTEGER NOT NULL REFERENCES paso(id),
+    fecha_entrega DATE,
+    fecha_inicio DATE,
+    fecha_termino DATE,
+    comentario TEXT,
+    archivo TEXT
+);
+
+CREATE INDEX idx_pte_detalle_header ON pte_detalle(id_pte_header_id);
+CREATE INDEX idx_pte_detalle_paso ON pte_detalle(id_paso_id);
+```
+
+### paso Table
+
+```sql
+CREATE TABLE paso (
+    id SERIAL PRIMARY KEY,
+    descripcion VARCHAR(200) NOT NULL,
+    orden VARCHAR(10),
+    activo BOOLEAN DEFAULT TRUE,
+    importancia DOUBLE PRECISION DEFAULT 0,
+    tipo INTEGER DEFAULT 1,
+    comentario TEXT,
+    id_tipo_cliente_id INTEGER REFERENCES tipo(id)
+);
+
+CREATE INDEX idx_paso_orden ON paso(orden);
+```
+
+## API Endpoints
+
+See [PTE API Documentation](/api/pte) for endpoint details.
+
+## Related Models
+
+<CardGroup cols={3}>
+  <Card title="Tipo" icon="tag" href="/api/models/catalogs#tipo">
+    Type classifications
+  </Card>
+  
+  <Card title="Estatus" icon="circle-check" href="/api/models/catalogs#estatus">
+    Status definitions
+  </Card>
+  
+  <Card title="Cliente" icon="building" href="/api/models/catalogs#cliente">
+    Client information
+  </Card>
+  
+  <Card title="ResponsableProyecto" icon="user" href="/api/models/catalogs#responsableproyecto">
+    Project managers
+  </Card>
+  
+  <Card title="OTE" icon="clipboard-list" href="/api/models/ote#ote">
+    Work orders from PTEs
+  </Card>
+</CardGroup>

@@ -1,0 +1,590 @@
+---
+title: 'Dashboards & Analytics'
+description: 'Real-time KPIs, charts, and status funnels for operational intelligence'
+icon: 'chart-line'
+---
+
+## Overview
+
+The Dashboard API provides aggregated analytics from the same filtered dataset used in global search, ensuring consistency between tabular and visual data.
+
+## API Endpoint
+
+### POST /centro_consulta/busqueda-global-graficas/
+
+```python operaciones/views/centro_consulta.py
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def fn_api_obtener_dashboard(request):
+    """
+    Endpoint exclusivo para alimentar las gráficas.
+    """
+    try:
+        cuerpo_peticion = json.loads(request.body)
+        registros_crudos, modo_sitio_libre = fn_ejecutar_query_graficas(cuerpo_peticion)
+        datos_agrupados = fn_agrupar_datos_dashboard(registros_crudos, modo_sitio_libre)
+
+        return JsonResponse({
+            "estatus": "ok",
+            "mensaje": "Dashboard calculado correctamente",
+            "data": datos_agrupados
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": "Formato JSON inválido"
+        }, status=400)
+    except Exception as error_servidor:
+        print(f"Error en dashboard: {str(error_servidor)}")
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": "Falla interna del servidor"
+        }, status=500)
+```
+
+### Request Format
+
+Uses the same filter structure as global search:
+
+```json
+{
+  "filtros": {
+    "origenes": ["PTE", "OT", "PROD"],
+    "lideres_id": ["1", "3"],
+    "clientes_id": ["5"],
+    "fecha_inicio": "2024-01-01",
+    "fecha_fin": "2024-12-31",
+    "buscar_por_frente": "1"
+  }
+}
+```
+
+## Dashboard Data Structure
+
+### Response Schema
+
+```json
+{
+  "estatus": "ok",
+  "mensaje": "Dashboard calculado correctamente",
+  "data": {
+    "totales_generales": {
+      "cargados": 245,
+      "pendientes": 87,
+      "no_aplica": 12
+    },
+    "distribucion_origenes": [
+      {"origen": "PTE", "total": 120},
+      {"origen": "OT", "total": 185},
+      {"origen": "PROD", "total": 39}
+    ],
+    "rendimiento_lideres": [
+      {
+        "nombre": "Juan Pérez",
+        "cargados": 45,
+        "pendientes": 12,
+        "no_aplica": 2
+      }
+    ],
+    "tipos_documentos": [
+      {
+        "documento": "PROPUESTA TECNICA",
+        "cargados": 30,
+        "pendientes": 5,
+        "no_aplica": 0
+      }
+    ],
+    "estatus_clientes": [
+      {
+        "cliente": "PEMEX",
+        "cargados": 80,
+        "pendientes": 20,
+        "no_aplica": 5
+      }
+    ],
+    "embudo_estatus": [
+      {"estatus": "EN REVISION", "total": 45},
+      {"estatus": "APROBADO", "total": 120}
+    ],
+    "frentes_ot": [
+      {"frente": "PATIO", "total": 85},
+      {"frente": "EMBARCACION", "total": 60}
+    ],
+    "sitios_ot": [
+      {"sitio": "PATIO A", "total": 45},
+      {"sitio": "EMBARCACION MAYA 1", "total": 30}
+    ],
+    "avance_folios": [
+      {
+        "folio": "OT-2024-001",
+        "cargados": 8,
+        "pendientes": 2,
+        "no_aplica": 1
+      }
+    ]
+  }
+}
+```
+
+## Query Execution
+
+```python operaciones/views/centro_consulta.py
+def fn_ejecutar_query_graficas(payload):
+    """
+    Ejecuta la consulta completa para alimentar los dashboards.
+    """
+    filtros = payload.get("filtros", {})
+    origenes = filtros.get("origenes", [])
+
+    subconsulta_dinamica   = fn_obtener_subconsulta_origenes(origenes)
+    clausula_where, params = fn_construir_where_dinamico(filtros)
+
+    buscar_por_frente = params["buscar_por_frente"]
+    modo_sitio_libre  = (buscar_por_frente == "0" and params["sw_sitio"] == 0)
+
+    sql = f"""
+        SELECT
+            T.lider,
+            T.tipo,
+            T.documento,
+            T.folio,
+            T.frente,
+            T.cliente,
+            T._fid_estatus_paso AS estatus_paso_id,
+            T.sitio_pat_desc,
+            T.sitio_emb_desc,
+            T.sitio_plat_desc,
+            T.sitio_oficial,
+            
+            CASE
+                WHEN %(buscar_por_frente)s = '1'
+                    THEN T.sitio_oficial
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_plataforma::text IN %(ids_sitios)s
+                    THEN T.sitio_plat_desc
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_embarcacion::text IN %(ids_sitios)s
+                    THEN T.sitio_emb_desc
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_patio::text IN %(ids_sitios)s
+                    THEN T.sitio_pat_desc
+                ELSE T.sitio_oficial
+            END AS sitio,
+            
+            CASE
+                WHEN T.archivo IS NOT NULL AND LENGTH(TRIM(T.archivo)) > 5
+                    THEN 1
+                ELSE 0
+            END AS tiene_archivo,
+            
+            T._descripcion_estatus
+        FROM (
+            {subconsulta_dinamica}
+        ) AS T
+        {clausula_where}
+    """
+
+    return fn_ejecutar_query_sql_lotes(sql, params), modo_sitio_libre
+```
+
+<Info>
+  **Batch Processing**: Uses `fn_ejecutar_query_sql_lotes()` for memory-efficient processing of large datasets.
+</Info>
+
+## Aggregation Logic
+
+```python operaciones/views/centro_consulta.py
+def fn_agrupar_datos_dashboard(registros_db, modo_sitio_libre=False):
+    totales = {"cargados": 0, "pendientes": 0, "no_aplica": 0}
+    origenes = {"PTE": 0, "OT": 0, "PROD": 0}
+    lideres = {}
+    documentos = {}
+    clientes = {}
+    estatus_embudo = {}
+    frentes = {}
+    sitios = {}
+    folios = {}
+
+    for fila in registros_db:
+        lider = fila.get("lider", "SIN LÍDER")
+        tipo = fila.get("tipo", "DESCONOCIDO")
+        documento = fila.get("documento", "SIN DOCUMENTO")
+        folio = fila.get("folio", "SIN FOLIO")
+        frente = fila.get("frente", "SIN FRENTE")
+        sitio = fila.get("sitio", "SIN SITIO")
+        cliente = fila.get("cliente", "SIN CLIENTE")
+        descripcion_estatus = fila.get("_descripcion_estatus")
+        texto_estatus = descripcion_estatus if descripcion_estatus else "ESTATUS DESCONOCIDO"
+        estatus_id = fila.get("estatus_paso_id")
+
+        valor_archivo = fila.get("tiene_archivo", 0)
+        es_cargado = True if valor_archivo == 1 else False
+        es_no_aplica = True if (estatus_id == 14 or documento == "NO APLICA") else False
+
+        # Count by origin type
+        if tipo in origenes:
+            origenes[tipo] += 1
+
+        # Status funnel
+        llave_estatus = texto_estatus
+        estatus_embudo[llave_estatus] = estatus_embudo.get(llave_estatus, 0) + 1
+
+        # OT and PROD specific aggregations
+        if tipo in ["OT", "PROD"]:
+            frentes[frente] = frentes.get(frente, 0) + 1
+            
+            if modo_sitio_libre:
+                # In free mode, count all site mentions
+                for desc_sitio in [
+                    fila.get("sitio_pat_desc"),
+                    fila.get("sitio_emb_desc"),
+                    fila.get("sitio_plat_desc"),
+                ]:
+                    if desc_sitio:
+                        sitios[desc_sitio] = sitios.get(desc_sitio, 0) + 1
+            else:
+                sitio_resuelto = fila.get("sitio", "SIN SITIO")
+                sitios[sitio_resuelto] = sitios.get(sitio_resuelto, 0) + 1
+
+        # Classify delivery status
+        if es_no_aplica:
+            totales["no_aplica"] += 1
+        elif es_cargado:
+            totales["cargados"] += 1
+        else:
+            totales["pendientes"] += 1
+
+        # Aggregate by dimensions
+        for tabla, clave in [(lideres, lider), (documentos, documento), (clientes, cliente), (folios, folio)]:
+            if clave not in tabla:
+                tabla[clave] = {"cargados": 0, "pendientes": 0, "no_aplica": 0}
+            
+            if es_no_aplica:
+                tabla[clave]["no_aplica"] += 1
+            elif es_cargado:
+                tabla[clave]["cargados"] += 1
+            else:
+                tabla[clave]["pendientes"] += 1
+
+    # Format output
+    datos_procesados = {
+        "totales_generales": totales,
+        "distribucion_origenes": [
+            {"origen": llave, "total": valor} 
+            for llave, valor in origenes.items()
+        ],
+        "rendimiento_lideres": [
+            {
+                "nombre": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in lideres.items()
+        ],
+        "tipos_documentos": [
+            {
+                "documento": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in documentos.items()
+        ],
+        "estatus_clientes": [
+            {
+                "cliente": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in clientes.items()
+        ],
+        "embudo_estatus": [
+            {"estatus": llave, "total": valor} 
+            for llave, valor in estatus_embudo.items()
+        ],
+        "frentes_ot": [
+            {"frente": llave, "total": valor} 
+            for llave, valor in frentes.items()
+        ],
+        "sitios_ot": [
+            {"sitio": llave, "total": valor} 
+            for llave, valor in sitios.items()
+        ],
+        "avance_folios": [
+            {
+                "folio": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in folios.items()
+        ]
+    }
+
+    return datos_procesados
+```
+
+## Dashboard Metrics
+
+### Totales Generales (General Totals)
+
+<AccordionGroup>
+  <Accordion title="cargados" icon="check">
+    Documents with valid file attachments (archivo length > 5)
+  </Accordion>
+  <Accordion title="pendientes" icon="clock">
+    Documents without valid file attachments
+  </Accordion>
+  <Accordion title="no_aplica" icon="ban">
+    Documents with status ID 14 or document type "NO APLICA"
+  </Accordion>
+</AccordionGroup>
+
+### Distribución Origenes (Origin Distribution)
+
+Breakdown by data source:
+- **PTE**: Technical-economic proposals
+- **OT**: Work orders
+- **PROD**: Production records (monthly reports + GPU)
+
+### Rendimiento Lideres (Leader Performance)
+
+For each project leader:
+- Documents delivered (cargados)
+- Documents pending (pendientes)
+- Documents not applicable (no_aplica)
+
+### Tipos Documentos (Document Types)
+
+Aggregation by document name:
+- PROPUESTA TECNICA
+- CONTRATO
+- REPORTE MENSUAL
+- etc.
+
+### Estatus Clientes (Client Status)
+
+Delivery metrics per client organization.
+
+### Embudo Estatus (Status Funnel)
+
+Count of records in each workflow status:
+- EN REVISION
+- APROBADO
+- RECHAZADO
+- etc.
+
+### Frentes OT (OT Fronts)
+
+Distribution across operational fronts (OT and PROD only):
+- PATIO
+- EMBARCACION
+- PLATAFORMA
+
+### Sitios OT (OT Sites)
+
+Distribution across work sites with two modes:
+
+<Tabs>
+  <Tab title="By Front Mode">
+    Sites grouped by their primary front assignment:
+    ```json
+    {
+      "sitios_ot": [
+        {"sitio": "PATIO A", "total": 45},
+        {"sitio": "EMBARCACION MAYA 1", "total": 30}
+      ]
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Free Mode">
+    All site mentions counted (site may appear in multiple fronts):
+    ```json
+    {
+      "sitios_ot": [
+        {"sitio": "PATIO A", "total": 60},  // Higher count
+        {"sitio": "PATIO B", "total": 25}
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Avance Folios (Folio Progress)
+
+Document completion tracking per work order or PTE folio.
+
+## Production Information Dashboard
+
+Separate endpoint for production-specific analytics:
+
+### POST /centro_consulta/busqueda-prod-info/
+
+```python operaciones/views/centro_consulta.py
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def fn_api_busqueda_prod_informacion(request):
+    try:
+        cuerpo_peticion  = json.loads(request.body)
+        salto_registros  = int(cuerpo_peticion.get("start", 0))
+        limite_registros = int(cuerpo_peticion.get("length", 10))
+        numero_dibujo    = int(cuerpo_peticion.get("draw", 1))
+        filtros          = cuerpo_peticion.get("filtros", {})
+
+        resultados_paginados, total_filtrados, datos_dashboard = fn_ejecutar_query_prod_info(
+            filtros, 
+            salto_registros, 
+            limite_registros
+        )
+
+        return JsonResponse({
+            "draw":            numero_dibujo,
+            "recordsTotal":    total_filtrados,
+            "recordsFiltered": total_filtrados,
+            "data":            resultados_paginados,
+            "dashboard":       datos_dashboard,
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({"estatus": "error", "mensaje": "JSON inválido"}, status=400)
+    except Exception as error_servidor:
+        print(f"Error en búsqueda producción info: {str(error_servidor)}")
+        return JsonResponse({"estatus": "error", "mensaje": "Falla interna del servidor"}, status=500)
+```
+
+### Production Dashboard Aggregations
+
+```python operaciones/views/centro_consulta.py
+def fn_calcular_aggregados_info(sql_union, params):
+    try:
+        sql_resumen = f"""
+            SELECT
+                COALESCE(SUM(importe_producido), 0) AS total_importe_producido,
+                COUNT(DISTINCT CASE WHEN vol_producido > 0 THEN ot END) AS proyectos_ejecutados,
+                COUNT(DISTINCT CASE WHEN vol_producido > 0 THEN fecha_produccion END) AS dias_unicos
+            FROM ({sql_union}) AS c
+        """
+
+        sql_mejor_dia = f"""
+            SELECT fecha_produccion, SUM(importe_producido) AS importe_dia
+            FROM ({sql_union}) AS c
+            WHERE vol_producido > 0
+            GROUP BY fecha_produccion
+            ORDER BY importe_dia DESC
+            LIMIT 1
+        """
+
+        sql_por_fecha = f"""
+            SELECT
+                fecha_produccion,
+                SUM(importe_producido)  AS importe_producido,
+                SUM(importe_programado) AS importe_programado
+            FROM ({sql_union}) AS c
+            GROUP BY fecha_produccion, _fecha_ord
+            ORDER BY _fecha_ord ASC NULLS LAST
+        """
+
+        # Execute aggregations
+        fila_totales = (ejecutar_query_sql(sql_resumen, params) or [{}])[0]
+        fila_mejor   = (ejecutar_query_sql(sql_mejor_dia, params) or [{}])[0]
+        fechas       = ejecutar_query_sql(sql_por_fecha, params) or []
+
+        return {
+            "resumen": {
+                "total_importe_producido": float(fila_totales.get("total_importe_producido") or 0),
+                "proyectos_ejecutados":    int(fila_totales.get("proyectos_ejecutados") or 0),
+                "dias_unicos":             int(fila_totales.get("dias_unicos") or 0),
+                "mejor_dia_fecha":         fila_mejor.get("fecha_produccion", "—"),
+                "mejor_dia_importe":       float(fila_mejor.get("importe_dia") or 0),
+            },
+            "por_fecha": [
+                {
+                    "fecha":              r["fecha_produccion"],
+                    "importe_producido":  float(r["importe_producido"] or 0),
+                    "importe_programado": float(r["importe_programado"] or 0),
+                }
+                for r in fechas
+            ],
+            # Additional aggregations: por_tipo_tiempo, por_sitio, por_lider, por_fecha_sitio
+        }
+
+    except Exception as error_agg:
+        print(f"Error en fn_calcular_aggregados_info: {str(error_agg)}")
+        return {}
+```
+
+<Info>
+  **Production Metrics**: Includes financial totals (importe_producido), project counts, and time-series data for trend analysis.
+</Info>
+
+## Visualization Recommendations
+
+<CardGroup cols={2}>
+  <Card title="Pie Chart" icon="chart-pie">
+    **distribucion_origenes**
+    
+    Show proportion of data from PTE, OT, and PROD sources
+  </Card>
+  
+  <Card title="Bar Chart" icon="chart-column">
+    **rendimiento_lideres, tipos_documentos**
+    
+    Compare performance across leaders or document types with stacked bars (cargados/pendientes/no_aplica)
+  </Card>
+  
+  <Card title="Funnel Chart" icon="filter">
+    **embudo_estatus**
+    
+    Visualize workflow progression through status stages
+  </Card>
+  
+  <Card title="Table/Grid" icon="table">
+    **avance_folios**
+    
+    Detailed per-folio progress tracking
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Consistent Filters">
+    Use identical filter payloads for search and dashboard APIs to ensure data consistency.
+  </Step>
+  
+  <Step title="Handle Empty Data">
+    All aggregation arrays may be empty. Check length before rendering:
+    ```javascript
+    if (data.rendimiento_lideres.length > 0) {
+      renderChart(data.rendimiento_lideres);
+    } else {
+      showEmptyState();
+    }
+    ```
+  </Step>
+  
+  <Step title="Special Status Handling">
+    Status ID 14 ("NO APLICA") has special semantics. Consider displaying separately or with distinct styling.
+  </Step>
+  
+  <Step title="Site Mode Context">
+    Inform users which site mode is active (by front vs. free) as it affects counts.
+  </Step>
+</Steps>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Global Search" icon="magnifying-glass" href="/features/centro-consulta/global-search">
+    Detailed search with same filter system
+  </Card>
+  <Card title="Reports & Export" icon="file-excel" href="/features/centro-consulta/reports-export">
+    Generate reports from filtered data
+  </Card>
+  <Card title="Query Center Overview" icon="chart-mixed" href="/features/centro-consulta/overview">
+    Architecture and data sources
+  </Card>
+</CardGroup>

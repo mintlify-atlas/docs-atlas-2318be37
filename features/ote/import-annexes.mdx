@@ -1,0 +1,778 @@
+---
+title: Import Annexes and Project Schedules
+description: Complete guide to importing Excel budget annexes and Microsoft Project (.mpp) schedules for work orders
+---
+
+## Overview
+
+SASCOP provides powerful import functionality for two critical document types:
+
+1. **Excel Annexes (Annex C)**: Budget breakdowns with line items, quantities, and pricing
+2. **Microsoft Project Files (.mpp)**: Detailed project schedules with tasks, dependencies, and resources
+
+<Info>
+  Both import types validate against master catalogs, detect errors, and provide detailed feedback for data quality issues.
+</Info>
+
+## Excel Annex Import System
+
+### ImportacionAnexo Model
+
+Tracks the header information for each Excel import:
+
+```python operaciones/models/ote_models.py
+def generar_ruta_anexo(instance, filename):
+    """
+    Genera una ruta dinámica: operaciones/anexos_ot/OT_<id>/<filename>
+    """
+    clean_filename = filename.replace(" ", "_")
+    return os.path.join('operaciones','anexos_ot', f'{instance.ot.orden_trabajo}', clean_filename)
+
+class ImportacionAnexo(models.Model):
+    """
+    Header de la importación de anexo C.
+    """
+    ot = models.ForeignKey(OTE, on_delete=models.CASCADE, related_name='importaciones_anexo')
+    archivo_excel = models.FileField(upload_to=generar_ruta_anexo)
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    usuario_carga = models.ForeignKey('auth.User', on_delete=models.SET_NULL, null=True)
+    total_registros = models.IntegerField(default=0)
+    es_activo = models.BooleanField(default=True)
+```
+
+<ParamField path="archivo_excel" type="FileField">
+  Uploaded Excel file stored in `operaciones/anexos_ot/{orden_trabajo}/`
+</ParamField>
+
+<ParamField path="es_activo" type="boolean">
+  Only one import can be active per work order at a time
+</ParamField>
+
+<ParamField path="total_registros" type="integer">
+  Count of valid line items imported
+</ParamField>
+
+### PartidaAnexoImportada Model
+
+Stores individual budget line items:
+
+```python operaciones/models/ote_models.py
+class PartidaAnexoImportada(models.Model):
+    """
+    Detalle de la importación de anexo C.
+    """
+    importacion_anexo = models.ForeignKey(ImportacionAnexo, on_delete=models.CASCADE, related_name='partidas')
+    id_partida = models.CharField(max_length=10)
+    descripcion_concepto = models.TextField()
+    anexo = models.CharField(max_length=10, null=True, blank=True)
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE)
+    volumen_proyectado = models.DecimalField(max_digits=18, decimal_places=6)
+    precio_unitario_mn = models.DecimalField(max_digits=15, decimal_places=4)
+    precio_unitario_usd = models.DecimalField(max_digits=15, decimal_places=4)
+    orden_fila = models.IntegerField()
+```
+
+<Note>
+  Line items are validated against the `ConceptoMaestro` catalog to ensure consistency with the master price list.
+</Note>
+
+### PartidaProyectada Model
+
+Tracks daily projected volumes (optional):
+
+```python operaciones/models/ote_models.py
+class PartidaProyectada(models.Model):
+    """
+    Modelo para importar partidas proyectadas por OT desde Excel
+    """
+    ot = models.ForeignKey('OTE', on_delete=models.CASCADE, null=True, blank=True)
+    partida_anexo = models.ForeignKey('PartidaAnexoImportada', on_delete=models.CASCADE, related_name='programacion_diaria', null=True, blank=True)
+    fecha = models.DateField(null=True, blank=True)
+    volumen_programado = models.DecimalField(max_digits=15, decimal_places=6, default=0, null=True, blank=True)
+```
+
+<Info>
+  If your Excel file contains date columns with projected volumes, these are imported as daily planning records.
+</Info>
+
+## Excel Import Endpoint
+
+```python operaciones/views/ote.py
+@csrf_exempt
+def importar_anexo_ot(request):
+    """
+    Procesa el archivo Excel (.xlsx o .xlsm).
+    """
+    if request.method == "POST":
+        ot_id = request.POST.get('ot_id')
+        archivo = request.FILES.get('archivo')
+        modo_actualizacion = request.POST.get('modo_actualizacion') == 'true'
+
+        if not ot_id or not archivo:
+            return JsonResponse({'exito': False, 'tipo_aviso':'advertencia', 'detalles': 'Faltan datos (OT o Archivo)'})
+```
+
+<ParamField path="ot_id" type="integer" required>
+  Work Order ID to link the import
+</ParamField>
+
+<ParamField path="archivo" type="file" required>
+  Excel file (.xlsx or .xlsm format)
+</ParamField>
+
+<ParamField path="modo_actualizacion" type="boolean">
+  - `true`: Update existing import, add new items only
+  - `false`: Replace entire import with new data
+</ParamField>
+
+## Automatic Sheet Detection
+
+The system intelligently locates the correct sheet and header row:
+
+```python operaciones/views/ote.py
+target_sheet = None
+header_row_index = -1
+sheet_names = sorted(xls.sheet_names, key=lambda x: 0 if ('ANEXO C' in x.upper() or 'RECURSOS PROGRAMADOS' in x.upper()) else 1)
+logs_busqueda = []
+
+for sheet in sheet_names:
+    try:
+        df_temp = pd.read_excel(xls, sheet_name=sheet, header=None, nrows=100)
+        found = False
+        for idx, row in df_temp.iterrows():
+            row_str = [str(x).strip().upper() for x in row.values]
+            
+            match_partida = 'PARTIDA' in row_str
+            match_concepto = 'CONCEPTO' in row_str
+            match_unidad = 'UNIDAD' in row_str
+            match_volumen = 'VOLUMEN PTE' in row_str
+            match_precio = ('P.U. M.N.' in row_str) or ('P.U.M.N.' in row_str)
+
+            if match_partida and match_concepto and match_unidad and match_volumen and match_precio:
+                header_row_index = idx
+                target_sheet = sheet
+                found = True
+                if 'ANEXO' not in row_str:
+                    logs_busqueda.append(f"[{sheet}]: Se encontraron cabeceras pero falta columna 'ANEXO'.")
+                break 
+```
+
+<Steps>
+  <Step title="Sort Sheets by Priority">
+    Sheets with "ANEXO C" or "RECURSOS PROGRAMADOS" in the name are checked first
+  </Step>
+  <Step title="Search for Header Row">
+    Scan first 100 rows looking for required column names
+  </Step>
+  <Step title="Validate Complete Headers">
+    Ensure PARTIDA, CONCEPTO, UNIDAD, VOLUMEN PTE, and P.U. M.N. columns exist
+  </Step>
+  <Step title="Extract Data">
+    Use detected header row as the starting point for data extraction
+  </Step>
+</Steps>
+
+<Warning>
+  If no valid header row is found in any sheet, the import fails with a detailed error message listing all sheets checked.
+</Warning>
+
+## Required Columns
+
+The Excel file must contain these columns:
+
+<ParamField path="ANEXO" type="string" required>
+  Annex identifier (A, B, C, etc.)
+</ParamField>
+
+<ParamField path="PARTIDA" type="string" required>
+  Line item code matching `ConceptoMaestro` catalog
+</ParamField>
+
+<ParamField path="CONCEPTO" type="string" required>
+  Description of work item
+</ParamField>
+
+<ParamField path="UNIDAD" type="string" required>
+  Unit of measure (must exist in `UnidadMedida` catalog)
+</ParamField>
+
+<ParamField path="VOLUMEN PTE" type="number" required>
+  Projected quantity/volume
+</ParamField>
+
+<ParamField path="P.U. M.N." type="number" required>
+  Unit price in Mexican Pesos
+</ParamField>
+
+<ParamField path="P.U. USD" type="number">
+  Unit price in US Dollars (optional)
+</ParamField>
+
+<ParamField path="OK" type="string">
+  If this column exists, only rows with value "OK" are imported
+</ParamField>
+
+## Catalog Validation
+
+All line items are validated against master catalogs:
+
+```python operaciones/views/ote.py
+conceptos_db = ConceptoMaestro.objects.filter(activo=True).select_related('unidad_medida')
+catalogo_map = {}          
+conceptos_por_codigo = {}  
+conceptos_set = set()      
+
+for concept in conceptos_db:
+    val_partida = concept.partida_ordinaria if concept.partida_ordinaria else concept.partida_extraordinaria
+    clave_p = clean_str(val_partida)
+    clave_c = clean_str(concept.descripcion)
+    clave_u_id = concept.unidad_medida.id
+    
+    key = (clave_p, clave_c, clave_u_id)
+    catalogo_map[key] = concept
+    conceptos_por_codigo[clave_p] = concept
+    conceptos_set.add(clave_c)
+```
+
+<Steps>
+  <Step title="Build Catalog Index">
+    Create in-memory lookup dictionaries for fast validation
+  </Step>
+  <Step title="Match Triple Key">
+    Validate against (partida, concepto, unidad_medida) combination
+  </Step>
+  <Step title="Check Individual Fields">
+    Provide detailed error messages for mismatches
+  </Step>
+</Steps>
+
+### Validation Error Messages
+
+```python operaciones/views/ote.py
+if not producto_encontrado:
+    fila_error = row.copy()
+    razon = ""
+    prod_candidato = conceptos_por_codigo.get(norm_codigo)
+    
+    if prod_candidato:
+        errores_encontrados = []
+        db_desc = clean_str(prod_candidato.descripcion)
+        if db_desc != norm_concepto: 
+            errores_encontrados.append(f"DESCRIPCIÓN DIFERENTE.")
+        if prod_candidato.unidad_medida.id != unidad_id_resuelto:
+            db_unit = prod_candidato.unidad_medida.clave
+            errores_encontrados.append(f"UNIDAD DIFERENTE. Excel: '{raw_unidad}' vs Catálogo: '{db_unit}'")
+        if not errores_encontrados: 
+            errores_encontrados.append("Posible duplicidad en catálogo.")
+        razon = " | ".join(errores_encontrados)
+    else:
+        if norm_concepto in conceptos_set: 
+            razon = f"CÓDIGO INCORRECTO. Partida '{norm_codigo}' no existe."
+        else: 
+            razon = f"NO ENCONTRADO en catálogo."
+
+    fila_error['OBSERVACIONES_SISTEMA'] = razon
+    errores_validacion.append(fila_error)
+```
+
+<AccordionGroup>
+  <Accordion title="Matching PARTIDA Found">
+    If code matches but description or unit differs, specific field mismatch is reported
+  </Accordion>
+  <Accordion title="Matching CONCEPTO Found">
+    If description matches but code differs, indicates incorrect code
+  </Accordion>
+  <Accordion title="No Match">
+    Item does not exist in master catalog at all
+  </Accordion>
+</AccordionGroup>
+
+## Error Export
+
+If validation errors are found, an Excel error report is generated:
+
+```python operaciones/views/ote.py
+if errores_validacion:
+    df_errores = pd.DataFrame(errores_validacion)
+    cols_limpias = [c for c in df_errores.columns if "UNNAMED" not in str(c).upper()]
+    df_errores = df_errores[cols_limpias]
+    
+    cols_ordenadas = ['OBSERVACIONES_SISTEMA'] + [c for c in cols_limpias if c != 'OBSERVACIONES_SISTEMA']
+    cols_finales = [c for c in cols_ordenadas if c in df_errores.columns]
+    df_errores = df_errores[cols_finales]
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_errores.to_excel(writer, index=False, sheet_name='Errores Importacion')
+        worksheet = writer.sheets['Errores Importacion']
+        if 'A' in worksheet.column_dimensions:
+            worksheet.column_dimensions['A'].width = 80 
+```
+
+<Warning>
+  When errors are found, the response includes the error Excel file as an attachment with header `X-Validation-Error: True`. No database changes are committed.
+</Warning>
+
+## Date Column Detection
+
+The system automatically detects date columns for daily volume planning:
+
+```python operaciones/views/ote.py
+columnas_fecha = []
+mapa_renombre = {}
+
+for col in df.columns:
+    es_fecha = False
+    fecha_obj = None
+    
+    if isinstance(col, (datetime, date)):
+        es_fecha = True
+        fecha_obj = col
+        if isinstance(fecha_obj, datetime):
+            fecha_obj = fecha_obj.date()
+    
+    elif isinstance(col, str):
+        try:
+            fecha_obj = pd.to_datetime(col, dayfirst=True).date()
+            es_fecha = True
+        except:
+            pass
+    
+    if es_fecha and fecha_obj:
+        columnas_fecha.append({'col_name': col, 'fecha': fecha_obj})
+    else:
+        mapa_renombre[col] = str(col).strip().upper()
+df.rename(columns=mapa_renombre, inplace=True)
+```
+
+<Info>
+  Any column whose header is a valid date (native datetime or parseable string) is treated as a daily volume projection column.
+</Info>
+
+## Daily Volume Import
+
+```python operaciones/views/ote.py
+schedule_data = []
+
+for col_info in columnas_fecha:
+    nombre_col_original = col_info['col_name']
+    fecha_real = col_info['fecha']
+    
+    val_fecha = row.get(nombre_col_original)
+    vol_prog = limpiar_moneda(val_fecha)
+    
+    if vol_prog > 0:
+        schedule_data.append({
+            'fecha': fecha_real,
+            'volumen': vol_prog
+        })
+        hay_programacion_diaria = True
+```
+
+If date columns are detected:
+
+```python operaciones/views/ote.py
+if hay_programacion_diaria:
+    objs_proyeccion = []
+    for partida_db, data_original in zip(partidas_creadas, partidas_validas):
+        schedule = data_original.get('schedule', [])
+        for item_prog in schedule:
+            objs_proyeccion.append(PartidaProyectada(
+                ot=ot,
+                partida_anexo=partida_db,
+                fecha=item_prog['fecha'],
+                volumen_programado=item_prog['volumen']
+            ))
+    
+    if objs_proyeccion:
+        PartidaProyectada.objects.bulk_create(objs_proyeccion)
+```
+
+<CardGroup cols={2}>
+  <Card title="Without Date Columns" icon="list">
+    Only total projected volume per line item is imported
+  </Card>
+  <Card title="With Date Columns" icon="calendar-days">
+    Daily volume breakdown is created for detailed production planning
+  </Card>
+</CardGroup>
+
+## Update Mode
+
+Update mode allows refreshing annexes without losing existing data:
+
+```python operaciones/views/ote.py
+if modo_actualizacion:
+    if not importacion_activa:
+        return JsonResponse({
+            'exito': False, 
+            'tipo_aviso': 'advertencia', 
+            'detalles': 'No se puede actualizar: No existe un Anexo cargado previamente.'
+        })
+
+    existentes_qs = PartidaAnexoImportada.objects.filter(importacion_anexo=importacion_activa)
+    mapa_db = {p.id_partida.strip().upper(): p for p in existentes_qs}
+    
+    objs_nuevos = []              
+    objs_actualizar_anexo = []    
+    lista_para_proyectar = []     
+
+    for data_excel in partidas_validas:
+        codigo = data_excel['codigo'].strip().upper()
+        
+        if codigo in mapa_db:
+            partida_existente = mapa_db[codigo]
+            
+            if partida_existente.anexo != data_excel['anexo_row']:
+                partida_existente.anexo = data_excel['anexo_row']
+                objs_actualizar_anexo.append(partida_existente)
+```
+
+<Steps>
+  <Step title="Check Existing Import">
+    Verify an active import exists for the work order
+  </Step>
+  <Step title="Match Line Items by Code">
+    Compare Excel data against existing records by `id_partida`
+  </Step>
+  <Step title="Update Annexes Only">
+    Only update the `anexo` field for matching items
+  </Step>
+  <Step title="Add New Items">
+    Create records for any new line items not previously imported
+  </Step>
+  <Step title="Refresh Daily Volumes">
+    Delete and recreate all daily volume projections
+  </Step>
+</Steps>
+
+## DataTable Display
+
+Retrieve imported line items for display:
+
+```python operaciones/views/ote.py
+def datatable_importaciones(request):
+    """
+    DATATABLE para las partidas importadas.
+    """
+    ot_id = request.GET.get('ot_id')
+    
+    try:
+        importacion = ImportacionAnexo.objects.get(ot_id=ot_id, es_activo=True)
+        queryset = PartidaAnexoImportada.objects.filter(
+            importacion_anexo=importacion
+        ).select_related('unidad_medida')
+        
+    except ImportacionAnexo.DoesNotExist:
+        return JsonResponse({
+            "draw": int(request.GET.get('draw', 1)),
+            "recordsTotal": 0,
+            "recordsFiltered": 0,
+            "data": [],
+            "totales": {"mn": 0, "usd": 0, "homologado": 0}
+        })
+
+    TIPO_CAMBIO = Decimal('19.1648')
+    resumen_totales = queryset.aggregate(
+        total_mn=Sum(F('volumen_proyectado') * F('precio_unitario_mn')),
+        total_usd=Sum(F('volumen_proyectado') * F('precio_unitario_usd'))
+    )
+    sum_mn = resumen_totales['total_mn'] or 0
+    sum_usd = resumen_totales['total_usd'] or 0
+    sum_homologado = sum_mn + (sum_usd * TIPO_CAMBIO)
+```
+
+### Response Format
+
+```json
+{
+  "draw": 1,
+  "recordsTotal": 150,
+  "recordsFiltered": 150,
+  "data": [
+    {
+      "codigo_concepto": "01.01.001",
+      "descripcion": "Pipe cleaning and inspection",
+      "unidad": "m",
+      "cantidad": 1500.000000,
+      "precio_unitario_mn": 125.5000,
+      "precio_unitario_usd": 0.0000,
+      "importe": 188250.00
+    }
+  ],
+  "totales": {
+    "mn": 5450000.00,
+    "usd": 125000.00,
+    "homologado": 7845100.00
+  }
+}
+```
+
+## Microsoft Project (.mpp) Import
+
+### CronogramaVersion Model
+
+```python operaciones/models.py
+class CronogramaVersion(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE)
+    nombre_version = models.CharField(max_length=255)
+    archivo_mpp = models.FileField(upload_to='cronogramas/')
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    fecha_inicio_proyecto = models.DateField(null=True, blank=True)
+    fecha_fin_proyecto = models.DateField(null=True, blank=True)
+    es_activo = models.BooleanField(default=True)
+```
+
+### MPP Import Endpoint
+
+```python operaciones/views/ote.py
+@csrf_exempt
+@login_required
+def importar_mpp_ot(request):
+    """
+    Procesa un archivo .mpp 
+    """
+    if request.method != 'POST':
+        return JsonResponse({'exito': False, 'tipo_aviso': 'advertencia', 'detalles': 'Método no permitido'})
+
+    ot_id = request.POST.get('ot_id')
+    archivo = request.FILES.get('archivo')
+
+    if not ot_id or not archivo:
+        return JsonResponse({'exito': False, 'tipo_aviso': 'advertencia', 'detalles': 'Faltan datos (OT o Archivo)'})
+
+    if not archivo.name.lower().endswith('.mpp'):
+        return JsonResponse({'exito': False, 'tipo_aviso': 'advertencia', 'detalles': 'El archivo debe tener extensión .mpp'})
+```
+
+<Warning>
+  MPP import requires `jpype1` and `mpxj` Python libraries. The system will return an error if these are not installed.
+</Warning>
+
+## JVM Initialization for MPP
+
+```python operaciones/views/ote.py
+try:
+    if not jpype.isJVMStarted():
+        import os
+        jars = []
+        
+        if hasattr(mpxj, 'CLASSPATH'):
+            cp = mpxj.CLASSPATH
+            if isinstance(cp, str):
+                jars.extend(cp.split(os.pathsep))
+            elif isinstance(cp, list):
+                jars.extend(cp)
+        
+        mpxj_dir = os.path.dirname(mpxj.__file__)
+        for root, dirs, files in os.walk(mpxj_dir):
+            for f in files:
+                if f.endswith('.jar'):
+                    jars.append(os.path.join(root, f))
+        
+        jars = list(set(jars))
+        classpath_str = os.pathsep.join(jars)
+
+        jpype.startJVM(
+            jpype.getDefaultJVMPath(),
+            "-Djava.awt.headless=true",
+            "-Xmx1024m",
+            classpath=classpath_str
+        )
+except Exception as e:
+    return JsonResponse({'exito': False, 'tipo_aviso': 'error', 'detalles': f'Error al iniciar JVM: {str(e)}'})
+```
+
+<Note>
+  The Java Virtual Machine (JVM) is initialized once per application lifecycle to read Microsoft Project files through the MPXJ library.
+</Note>
+
+## Custom Field Detection
+
+The system automatically detects custom fields for weight (ponderador) and progress:
+
+```python operaciones/views/ote.py
+columna_pond_oficial = None
+columna_avance_oficial = None
+
+for cf in project.getCustomFields():
+    alias_original = str(cf.getAlias() or '')
+    alias = alias_original.strip().lower()
+    
+    if alias in ['pond.', 'pond', 'ponderador', 'peso']:
+        columna_pond_oficial = cf.getFieldType()
+        break
+
+for cf in project.getCustomFields():
+    alias_original = str(cf.getAlias() or '')
+    alias = alias_original.strip().lower()
+    
+    if alias in ['avance real', '% avance', 'fisico', 'físico']:
+        columna_avance_oficial = cf.getFieldType()
+        break
+```
+
+<AccordionGroup>
+  <Accordion title="Ponderador (Weight) Field">
+    Looks for custom fields named: "pond.", "pond", "ponderador", "peso" or containing "pond"/"peso"
+  </Accordion>
+  <Accordion title="Avance (Progress) Field">
+    Looks for: "avance real", "% avance", "fisico", "físico" or containing these terms
+  </Accordion>
+</AccordionGroup>
+
+## Task Import
+
+```python operaciones/views/ote.py
+tasks_to_create = []
+dependencies_to_create = []
+
+for task in project.getTasks():
+    if task.getID() is None:
+        continue
+
+    padre = task.getParentTask()
+    padre_uid = padre.getUniqueID() if padre and padre.getID() is not None else None
+
+    recursos_str = ''
+    assignments = task.getResourceAssignments()
+    if assignments:
+        nombres = []
+        for assignment in assignments:
+            res = assignment.getResource()
+            if res:
+                nombres.append(str(res.getName()))
+        recursos_str = ', '.join(nombres)
+
+    duracion = task.getDuration()
+    duracion_dias = float(duracion.getDuration()) if duracion else 0.0
+    
+    tasks_to_create.append(TareaCronograma(
+        version=version,
+        uid_project=task.getUniqueID(),
+        id_project=task.getID(),
+        wbs=str(task.getWBS() or ''),
+        nivel_esquema=task.getOutlineLevel() or 0,
+        es_resumen=task.hasChildTasks(),
+        padre_uid=padre_uid,
+        nombre=str(task.getName() or ''),
+        fecha_inicio=java_date_to_py(task.getStart()),
+        fecha_fin=java_date_to_py(task.getFinish()),
+        duracion_dias=duracion_dias,
+        porcentaje_mpp=ponderador,
+        porcentaje_completado=avance_real,
+        recursos=recursos_str,
+    ))
+```
+
+### TareaCronograma Model
+
+```python operaciones/models.py
+class TareaCronograma(models.Model):
+    version = models.ForeignKey(CronogramaVersion, on_delete=models.CASCADE, related_name='tareas')
+    uid_project = models.IntegerField()
+    id_project = models.IntegerField()
+    wbs = models.CharField(max_length=50)
+    nivel_esquema = models.IntegerField(default=0)
+    es_resumen = models.BooleanField(default=False)
+    padre_uid = models.IntegerField(null=True, blank=True)
+    nombre = models.TextField()
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_fin = models.DateField(null=True, blank=True)
+    duracion_dias = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    porcentaje_mpp = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    porcentaje_completado = models.DecimalField(max_digits=6, decimal_places=2, default=0)
+    recursos = models.TextField(blank=True, null=True)
+```
+
+## Dependency Import
+
+```python operaciones/views/ote.py
+predecessors = task.getPredecessors()
+if predecessors:
+    for rel in predecessors:
+        tipo_rel = 'FS'
+        java_type = rel.getType()
+        if java_type == RelationType.START_START:
+            tipo_rel = 'SS'
+        elif java_type == RelationType.FINISH_FINISH:
+            tipo_rel = 'FF'
+        elif java_type == RelationType.START_FINISH:
+            tipo_rel = 'SF'
+
+        predecesor_task = None
+        if hasattr(rel, 'getSourceTask'):
+            predecesor_task = rel.getSourceTask()
+            if predecesor_task and predecesor_task.getUniqueID() == task.getUniqueID() and hasattr(rel, 'getTargetTask'):
+                predecesor_task = rel.getTargetTask()
+        elif hasattr(rel, 'getTask'):
+            predecesor_task = rel.getTask()
+
+        if predecesor_task:
+            lag = rel.getLag()
+            lag_dias = float(lag.getDuration()) if lag else 0.0
+            
+            dependencies_to_create.append(DependenciaTarea(
+                version=version,
+                tarea_predecesora_uid=predecesor_task.getUniqueID(),
+                tarea_sucesora_uid=task.getUniqueID(),
+                tipo=tipo_rel,
+                lag_dias=lag_dias,
+            ))
+```
+
+### Dependency Types
+
+<ParamField path="tipo" type="string">
+  - `"FS"`: Finish-to-Start (default)
+  - `"SS"`: Start-to-Start
+  - `"FF"`: Finish-to-Finish
+  - `"SF"`: Start-to-Finish
+</ParamField>
+
+<ParamField path="lag_dias" type="decimal">
+  Lag time in days (can be negative for lead time)
+</ParamField>
+
+## Bulk Insert
+
+```python operaciones/views/ote.py
+with transaction.atomic():
+    TareaCronograma.objects.filter(version=version).delete()
+    DependenciaTarea.objects.filter(version=version).delete()
+    TareaCronograma.objects.bulk_create(tasks_to_create, batch_size=2000)
+    DependenciaTarea.objects.bulk_create(dependencies_to_create, batch_size=2000)
+
+return JsonResponse({
+    'exito': True,
+    'tipo_aviso': 'exito',
+    'detalles': f'Programa importado correctamente: {len(tasks_to_create)} tareas procesadas.',
+    'version_id': version.pk,
+})
+```
+
+<Info>
+  Tasks and dependencies are inserted in batches of 2000 records for optimal performance. The entire import is wrapped in a transaction to ensure data consistency.
+</Info>
+
+## URL Endpoints
+
+```python operaciones/urls.py
+path('ot/datatable-importaciones/', ote.datatable_importaciones, name='datatable_importaciones'),
+path('ot/importar_anexo_ot/', ote.importar_anexo_ot, name='importar_anexo_ot'),
+path('ot/importar-mpp/', ote.importar_mpp_ot, name='importar_mpp_ot'),
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Work Order Overview" icon="clipboard-list" href="/features/ote/overview">
+    Understand the complete OTE system
+  </Card>
+  <Card title="Production Module" icon="chart-line" href="/features/production/overview">
+    Track production against imported budgets
+  </Card>
+  <Card title="Master Catalogs" icon="database" href="/features/catalogs/overview">
+    Manage ConceptoMaestro and UnidadMedida catalogs
+  </Card>
+</CardGroup>

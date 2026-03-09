@@ -1,0 +1,413 @@
+---
+title: Daily Reports
+description: Track daily operational status for work orders across multiple sites with attendance grid management
+icon: calendar-check
+---
+
+## Overview
+
+Daily Reports (ReporteDiario) control the operational status for each day of a work order at a specific site. They feed the "Attendance Grid" visualization that shows whether crews were productive, non-productive, or on standby.
+
+<Info>
+  Daily reports are automatically linked to monthly reports and must respect work order validity periods.
+</Info>
+
+## ReporteDiario Model Structure
+
+<CodeGroup>
+```python produccion_models.py:44-62
+class ReporteDiario(models.Model):
+    """
+    Controla el estatus operativo del día para una OT.
+    Alimenta el Grid de Asistencia.
+    """
+    id_reporte_mensual = models.ForeignKey(ReporteMensual, on_delete=models.CASCADE, related_name='dias_estatus', blank=True, null=True)
+    fecha = models.DateField()
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 6}, default=1, verbose_name="Estatus Operativo")
+    comentario = models.CharField(max_length=255, blank=True, null=True, help_text="Observación breve del día")
+    bloqueado = models.BooleanField(default=False)
+    id_sitio = models.ForeignKey(Sitio, on_delete=models.CASCADE, null=True, blank=True)
+    
+    class Meta:
+        db_table = 'reporte_diario_detalle'
+        unique_together = ['id_reporte_mensual', 'fecha', 'id_sitio']
+        indexes = [models.Index(fields=['fecha'])]
+
+    def __str__(self):
+        return f"{self.fecha} - {self.id_estatus}"
+```
+</CodeGroup>
+
+### Field Descriptions
+
+<ParamField path="id_reporte_mensual" type="ForeignKey" required>
+  Parent monthly report container
+</ParamField>
+
+<ParamField path="fecha" type="DateField" required>
+  Specific date for this operational status entry
+</ParamField>
+
+<ParamField path="id_estatus" type="ForeignKey" required>
+  Operational status (Productive, Non-productive, Standby, etc.)
+  
+  **Constraint:** `nivel_afectacion=6` (filters to daily operational statuses only)
+</ParamField>
+
+<ParamField path="comentario" type="CharField(255)">
+  Brief observation about the day's operations (weather, issues, etc.)
+</ParamField>
+
+<ParamField path="bloqueado" type="BooleanField" default="False">
+  Prevents further editing when day is closed
+</ParamField>
+
+<ParamField path="id_sitio" type="ForeignKey">
+  Operational site where the work occurred (platform, vessel, yard)
+</ParamField>
+
+## Loading Daily Reports for Grid
+
+The system loads daily reports for all work orders at a site, creating a matrix view.
+
+<CodeGroup>
+```python produccion.py:70-137
+@login_required
+def ots_por_sitio_grid(request):
+    """
+    Lista las OTs activas en un sitio y CARGA sus reportes diarios
+    para llenar el grid.
+    """
+    id_sitio = request.GET.get('id_sitio')
+    mes = request.GET.get('mes')
+    anio = request.GET.get('anio')
+    
+    if not id_sitio or not mes or not anio:
+        return JsonResponse({'reportes_diarios': [], 'produccion': []})
+
+    try:
+        mes, anio = int(mes), int(anio)
+        id_sitio_int = int(id_sitio)
+    except ValueError:
+        return JsonResponse({'reportes_diarios': [], 'produccion': []})
+    
+    ultimo_dia = calendar.monthrange(anio, mes)[1]
+    fecha_inicio_mes = date(anio, mes, 1)
+    fecha_fin_mes = date(anio, mes, ultimo_dia)
+
+    # Query for OTs at this site
+    query = Q(id_embarcacion=id_sitio) | Q(id_plataforma=id_sitio) | \
+            Q(id_patio=id_sitio) | Q(id_intercom=id_sitio)
+
+    # Complex query considering OT validity and reprogramming
+    queryset = OTE.objects.filter(
+        query,    
+        id_tipo_id=4,            
+        estatus=1,
+        importaciones_anexo__es_activo=True
+    ).distinct()
+
+    # Annotate with validity dates
+    queryset = queryset.annotate(
+        inicio_vigencia=Coalesce('fecha_inicio_real', 'fecha_inicio_programado'),
+        fin_vigencia=Case(
+            When(fin_repro__gt=F('fin_propio'), then=F('fin_repro')),
+            default=F('fin_propio')
+        )
+    ).filter(
+        Q(inicio_vigencia__lte=fecha_fin_mes, fin_vigencia__gte=fecha_inicio_mes)
+    )
+
+    ids_ots = list(queryset.values_list('id', flat=True))
+    
+    # Load all daily reports for the month
+    reportes_data = ReporteDiario.objects.filter(
+        id_reporte_mensual__id_ot_id__in=ids_ots,
+        id_reporte_mensual__mes=mes,
+        id_reporte_mensual__anio=anio,
+        id_sitio=id_sitio_int
+    ).values(
+        'id_reporte_mensual__id_ot_id', 
+        'fecha__day',                  
+        'id_estatus__descripcion'            
+    )
+
+    # Create attendance map
+    mapa_asistencia = {}
+    for r in reportes_data:
+        key = (r['id_reporte_mensual__id_ot_id'], r['fecha__day'])
+        mapa_asistencia[key] = r['id_estatus__descripcion']
+```
+</CodeGroup>
+
+<Tip>
+  The system automatically calculates blocked days based on OT validity periods, preventing data entry outside the work order's active dates.
+</Tip>
+
+## Saving Daily Reports in Bulk
+
+The system supports bulk saving of daily reports across multiple work orders.
+
+<CodeGroup>
+```python produccion.py:214-291
+def guardar_reportes_diarios_masiva(request):
+    """
+    Guarda los reportes diarios
+    """
+    try:
+        data = json.loads(request.body)
+        filas = data.get('reportes', [])
+        mes, anio = int(data.get('mes')), int(data.get('anio'))
+        id_sitio = data.get('id_sitio')
+
+        if not filas:
+            return JsonResponse({'exito': True, 'mensaje': 'Sin datos para guardar'})
+        
+        if not id_sitio:
+            return JsonResponse({'exito': False, 'mensaje': 'El sitio es obligatorio para guardar reportes.'})
+
+        sitio_obj = Sitio.objects.get(id=id_sitio)
+        estatus_qs = Estatus.objects.filter(nivel_afectacion=4)
+        mapa_estatus = {e.descripcion: e for e in estatus_qs}
+
+        with transaction.atomic():
+            for fila in filas:
+                id_ot = fila.get('id_ot')
+                valores = fila.get('valores', [])
+                
+                # Get or create monthly report
+                reporte_mensual, _ = ReporteMensual.objects.get_or_create(
+                    id_ot_id=id_ot,
+                    mes=mes,
+                    anio=anio,
+                    defaults={'id_estatus_id': 1}
+                )
+
+                # Load existing daily reports
+                reportes_existentes = {
+                    r.fecha.day: r 
+                    for r in ReporteDiario.objects.filter(
+                        id_reporte_mensual=reporte_mensual,
+                        id_sitio=sitio_obj
+                    )
+                }
+                
+                a_crear, a_actualizar, ids_borrar = [], [], []
+
+                for idx, val_texto in enumerate(valores):
+                    dia = idx + 1
+                    
+                    try:
+                        fecha_dia = date(anio, mes, dia)
+                    except ValueError:
+                        continue
+
+                    reporte_obj = reportes_existentes.get(dia)
+                    estatus_obj = mapa_estatus.get(val_texto)
+
+                    if val_texto and estatus_obj:
+                        if reporte_obj:
+                            if reporte_obj.id_estatus != estatus_obj:
+                                reporte_obj.id_estatus = estatus_obj
+                                a_actualizar.append(reporte_obj)
+                        else:
+                            a_crear.append(ReporteDiario(
+                                id_reporte_mensual=reporte_mensual,
+                                fecha=fecha_dia,
+                                id_estatus=estatus_obj,
+                                bloqueado=False,
+                                id_sitio=sitio_obj
+                            ))
+                    elif reporte_obj:
+                        ids_borrar.append(reporte_obj.id)
+
+                # Bulk operations for performance
+                if a_crear: ReporteDiario.objects.bulk_create(a_crear)
+                if a_actualizar: ReporteDiario.objects.bulk_update(a_actualizar, ['id_estatus'])
+
+        return JsonResponse({'exito': True, 'mensaje': 'Reportes diarios guardados correctamente.'})
+
+    except Exception as e:
+        return JsonResponse({'exito': False, 'mensaje': str(e)}, status=500)
+```
+</CodeGroup>
+
+<Info>
+  **Performance Optimization:** The system uses `bulk_create` and `bulk_update` to minimize database round trips when saving multiple daily reports.
+</Info>
+
+## Daily Status Options
+
+Daily reports use operational statuses with `nivel_afectacion=6`:
+
+<CardGroup cols={3}>
+  <Card title="Productivo" icon="check-circle" color="#10b981">
+    Crew was on-site and performed productive work
+  </Card>
+  <Card title="No Productivo" icon="x-circle" color="#ef4444">
+    Crew was on-site but unable to work (weather, equipment issues)
+  </Card>
+  <Card title="Standby" icon="pause-circle" color="#f59e0b">
+    Waiting period (client delays, permissions)
+  </Card>
+</CardGroup>
+
+## Blocked Days Logic
+
+The system automatically blocks days outside the work order's validity period.
+
+<CodeGroup>
+```python produccion.py:189-194
+for d in range(1, ultimo_dia + 1):
+    fecha_dia = date(anio, mes, d)
+    if vigencia_inicio and fecha_dia < vigencia_inicio:
+        dias_bloqueados.append(d)
+    elif vigencia_fin and fecha_dia > vigencia_fin:
+        dias_bloqueados.append(d)
+```
+</CodeGroup>
+
+<Warning>
+  Blocked days cannot be edited in the frontend. This ensures data integrity and prevents recording work outside contracted periods.
+</Warning>
+
+## Special Handling for Yard Phase
+
+Work orders with yard requirements have separate validity tracking:
+
+<CodeGroup>
+```python produccion.py:171-187
+if ot.requiere_patio and ot.id_patio == id_sitio_int:
+    f_ini = ot.fecha_inicio_patio
+    f_fin = ot.fin_vigencia_patio
+    
+    if f_ini: vigencia_inicio = f_ini
+    if f_fin: vigencia_fin = f_fin
+    
+    se_muestra = True
+    
+    # Check if yard phase is within month range
+    if f_fin and f_fin < fecha_inicio_mes:
+        se_muestra = False
+    
+    if f_ini and f_ini > fecha_fin_mes:
+        se_muestra = False
+    
+    if not se_muestra:
+        continue
+```
+</CodeGroup>
+
+<Tip>
+  Some work orders require yard preparation before offshore work. The system tracks yard and offshore phases independently with separate validity periods.
+</Tip>
+
+## Attendance Grid Visualization
+
+The daily report data populates a grid with:
+
+- **Rows:** One per work order
+- **Columns:** Days 1-31 of the selected month
+- **Cells:** Operational status or blocked (grayed out)
+
+<Frame>
+  <img src="/images/daily-reports-grid-example.png" alt="Daily Reports Grid" />
+</Frame>
+
+## API Endpoint Reference
+
+<AccordionGroup>
+  <Accordion title="GET /produccion/ots_por_sitio_grid/" icon="code">
+    Returns work orders and daily reports for grid display.
+    
+    **Query Parameters:**
+    ```yaml
+    id_sitio: integer (required) - Site ID
+    mes: integer (required) - Month (1-12)
+    anio: integer (required) - Year (e.g., 2025)
+    ```
+    
+    **Response Structure:**
+    ```json
+    {
+      "reportes_diarios": [
+        {
+          "id_ot": 123,
+          "ot": "OTE-2025-001",
+          "desc": "Platform Maintenance",
+          "inicio_v": "2025-03-01",
+          "fin_v": "2025-03-31",
+          "archivo": "https://drive.google.com/...",
+          "dias_bloqueados": [1, 2, 30, 31],
+          "dia1": "Productivo",
+          "dia2": null,
+          "dia3": "Productivo",
+          ...
+          "dia31": null
+        }
+      ]
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="POST /produccion/guardar_reportes_diarios_masiva/" icon="code">
+    Bulk saves daily reports for multiple work orders.
+    
+    **Request Body:**
+    ```json
+    {
+      "reportes": [
+        {
+          "id_ot": 123,
+          "valores": [
+            "Productivo",
+            "Productivo",
+            "No Productivo",
+            null,
+            ...
+          ]
+        }
+      ],
+      "mes": 3,
+      "anio": 2025,
+      "id_sitio": 5
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+      "exito": true,
+      "mensaje": "Reportes diarios guardados correctamente."
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Daily Entry">
+    Enter daily reports at the end of each workday for accuracy
+  </Step>
+  <Step title="Comment Important Events">
+    Use the `comentario` field to note weather issues, equipment failures, or client delays
+  </Step>
+  <Step title="Verify Blocked Days">
+    Always check blocked days match the work order's contracted period
+  </Step>
+  <Step title="Coordinate with Production">
+    Ensure daily status matches production volumes (no production on non-productive days)
+  </Step>
+</Steps>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Monthly Reports" icon="folder" href="/features/production/monthly-reports">
+    Learn about monthly report consolidation
+  </Card>
+  <Card title="Production Overview" icon="chart-line" href="/features/production/overview">
+    Return to production tracking overview
+  </Card>
+</CardGroup>

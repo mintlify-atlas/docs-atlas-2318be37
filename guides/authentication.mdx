@@ -1,0 +1,233 @@
+---
+title: 'User Authentication'
+description: 'Learn how to log in, manage your session, and secure your account in SASCOP BME SubTec'
+icon: 'key'
+---
+
+## Overview
+
+SASCOP BME SubTec uses Django's authentication system to provide secure access to the platform. Users can log in with either their username or email address.
+
+## Logging In
+
+<Steps>
+  <Step title="Navigate to Login Page">
+    Open your browser and navigate to the SASCOP BME SubTec login page at `/accounts/login/`
+  </Step>
+  
+  <Step title="Enter Credentials">
+    You can log in using either:
+    - Your **username**
+    - Your **email address**
+    
+    Then enter your password.
+  </Step>
+  
+  <Step title="Click Login">
+    Click the "Iniciar Sesión" button to access the system.
+  </Step>
+</Steps>
+
+<Note>
+  The system automatically redirects authenticated users to the dashboard if they attempt to access the login page.
+</Note>
+
+## Authentication Flow
+
+The authentication process is handled by the `custom_login` function:
+
+```python operaciones/views/login.py
+@ensure_csrf_cookie 
+def custom_login(request):
+    """Vista para login que acepta username o email"""
+    if request.user.is_authenticated:
+        return redirect('core:dashboard')
+    
+    if request.method == 'POST':
+        username_or_email = request.POST.get('username')
+        password = request.POST.get('password')
+        
+        # First try authenticating with username
+        user = authenticate(request, username=username_or_email, password=password)
+        
+        # If that fails, try finding user by email
+        if user is None:
+            try:
+                user_by_email = User.objects.get(email__iexact=username_or_email)
+                user = authenticate(request, username=user_by_email.username, password=password)
+            except User.DoesNotExist:
+                user = None
+        
+        if user is not None:
+            login(request, user)
+            request.session['last_activity'] = timezone.now().timestamp()
+            return redirect('core:dashboard')
+```
+
+## Session Management
+
+### Session Timeout
+
+SASCOP implements automatic session timeout for security:
+
+<Card title="Session Configuration" icon="clock">
+  - **Session Duration**: 2 hours (7200 seconds)
+  - **Auto-Save**: Sessions are saved on every request
+  - **Browser Close**: Session persists after browser close
+</Card>
+
+```python bme_subtec/settings.py
+SESSION_COOKIE_AGE = 7200  # 2 hours
+SESSION_SAVE_EVERY_REQUEST = True 
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+```
+
+### Session Expiration
+
+When your session expires due to inactivity:
+
+1. You'll be redirected to the login page
+2. An error message will display: "La sesión ha expirado por inactividad"
+3. Simply re-enter your credentials to continue
+
+<Warning>
+  Your session will expire after 2 hours of inactivity. Make sure to save your work regularly.
+</Warning>
+
+## Logging Out
+
+<Steps>
+  <Step title="Access Logout">
+    Click on your user profile menu in the top navigation bar
+  </Step>
+  
+  <Step title="Click Logout">
+    Select "Cerrar Sesión" from the dropdown menu
+  </Step>
+  
+  <Step title="Confirmation">
+    You'll be redirected to the login page with a success message
+  </Step>
+</Steps>
+
+### Logout Implementation
+
+```python operaciones/views/login.py
+class CustomLogoutView(LogoutView):
+    """LogoutView personalizado que limpia la variable de sesión de actividad"""
+    
+    def dispatch(self, request, *args, **kwargs):
+        if 'last_activity' in request.session:
+            del request.session['last_activity']
+        
+        request.session.save()
+        return super().dispatch(request, *args, **kwargs)
+```
+
+## Security Features
+
+### Password Validation
+
+SASCOP enforces strong password requirements:
+
+<CardGroup cols={2}>
+  <Card title="Similarity Check" icon="user-lock">
+    Passwords cannot be too similar to your user information
+  </Card>
+  <Card title="Minimum Length" icon="ruler">
+    Passwords must meet minimum length requirements
+  </Card>
+  <Card title="Common Passwords" icon="shield-halved">
+    Common passwords are blocked
+  </Card>
+  <Card title="Numeric Only" icon="hashtag">
+    Passwords cannot be entirely numeric
+  </Card>
+</CardGroup>
+
+```python bme_subtec/settings.py
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+```
+
+### CSRF Protection
+
+All forms include CSRF protection to prevent cross-site request forgery attacks.
+
+<Note>
+  The login view uses `@ensure_csrf_cookie` decorator to ensure CSRF tokens are properly set.
+</Note>
+
+## Troubleshooting
+
+### Login Issues
+
+<AccordionGroup>
+  <Accordion title="Invalid Username/Password">
+    **Error Message**: "Usuario/email o contraseña incorrectos"
+    
+    **Solutions**:
+    - Verify you're using the correct username or email
+    - Check for typos in your password (passwords are case-sensitive)
+    - Contact your system administrator to reset your password
+  </Accordion>
+
+  <Accordion title="Session Expired">
+    **Error Message**: "La sesión ha expirado por inactividad"
+    
+    **Solutions**:
+    - This is normal after 2 hours of inactivity
+    - Simply log in again with your credentials
+    - Your work may have been auto-saved depending on the module
+  </Accordion>
+
+  <Accordion title="Account Locked">
+    If your account has been deactivated:
+    - Contact your system administrator
+    - Provide your username or email for account reactivation
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Strong Passwords" icon="lock">
+    Create unique passwords with a mix of letters, numbers, and symbols
+  </Card>
+  
+  <Card title="Log Out When Done" icon="right-from-bracket">
+    Always log out when using shared computers
+  </Card>
+  
+  <Card title="Keep Session Active" icon="clock-rotate-left">
+    Interact with the system regularly during long work sessions
+  </Card>
+  
+  <Card title="Secure Your Device" icon="shield">
+    Keep your computer and browser secure with latest updates
+  </Card>
+</CardGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Dashboard Navigation" icon="compass" href="/guides/dashboard-navigation">
+    Learn how to navigate the main dashboard
+  </Card>
+  
+  <Card title="User Permissions" icon="user-shield" href="/guides/user-permissions">
+    Understand user roles and permissions
+  </Card>
+</CardGroup>

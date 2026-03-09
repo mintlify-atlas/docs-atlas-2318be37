@@ -1,0 +1,573 @@
+---
+title: Environment Variables
+description: Complete reference for all environment variables used in SASCOP BME SubTec
+---
+
+## Overview
+
+SASCOP BME SubTec uses environment variables to configure the application for different environments (development, staging, production). Variables are loaded using `python-dotenv` from a `.env` file.
+
+## Loading Environment Variables
+
+Environment variables are loaded in `bme_subtec/settings.py:1-5`:
+
+```python bme_subtec/settings.py
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
+```
+
+<Note>
+The `.env` file is included in `.gitignore` and should never be committed to version control.
+</Note>
+
+## Core Django Settings
+
+### SECRET_KEY
+
+**Required:** Yes  
+**Default:** `'django-insecure-bme-subtec-default-key-change-in-production'`  
+**Purpose:** Cryptographic signing key for Django security features
+
+```python bme_subtec/settings.py
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-bme-subtec-default-key-change-in-production')
+```
+
+**Example:**
+```bash .env
+SECRET_KEY=django-insecure-xyz123-change-in-production
+```
+
+<Warning>
+**Production:** Always use a strong, unique secret key. Generate one with:
+```bash
+python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
+```
+</Warning>
+
+### DEBUG
+
+**Required:** No  
+**Default:** `True`  
+**Purpose:** Enable/disable debug mode
+
+```python bme_subtec/settings.py
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
+```
+
+**Example:**
+```bash .env
+# Development
+DEBUG=True
+
+# Production
+DEBUG=False
+```
+
+<Warning>
+**Never enable DEBUG in production!** It exposes sensitive information and impacts performance.
+</Warning>
+
+### ALLOWED_HOSTS
+
+**Required:** Yes (in production)  
+**Default:** `['localhost', '127.0.0.1', '0.0.0.0', '*']`  
+**Purpose:** List of allowed host/domain names
+
+**Current Configuration:**
+```python bme_subtec/settings.py
+ALLOWED_HOSTS = [
+    'localhost',
+    '127.0.0.1',
+    '0.0.0.0',
+    '*'
+]
+```
+
+**Production Example:**
+```bash .env
+ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com,54.227.40.69
+```
+
+Update settings.py to use environment variable:
+```python
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
+```
+
+## Database Configuration
+
+### RDS_DB_NAME
+
+**Required:** Yes  
+**Default:** `'postgres'`  
+**Purpose:** Database name
+
+```python bme_subtec/settings.py
+'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+```
+
+**Example:**
+```bash .env
+# Development
+RDS_DB_NAME=sascop_local
+
+# Production
+RDS_DB_NAME=sascop_production
+```
+
+### RDS_USERNAME
+
+**Required:** Yes  
+**Default:** `'postgres'`  
+**Purpose:** Database user
+
+```python bme_subtec/settings.py
+'USER': os.environ.get('RDS_USERNAME', 'postgres'),
+```
+
+**Example:**
+```bash .env
+RDS_USERNAME=sascop_user
+```
+
+### RDS_PASSWORD
+
+**Required:** Yes  
+**Default:** `''` (empty string)  
+**Purpose:** Database password
+
+```python bme_subtec/settings.py
+'PASSWORD': os.environ.get('RDS_PASSWORD', ''),
+```
+
+**Example:**
+```bash .env
+RDS_PASSWORD=secure_database_password
+```
+
+### RDS_HOSTNAME
+
+**Required:** Yes  
+**Default:** `'localhost'`  
+**Purpose:** Database host
+
+```python bme_subtec/settings.py
+'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+```
+
+**Example:**
+```bash .env
+# Local
+RDS_HOSTNAME=localhost
+
+# AWS RDS
+RDS_HOSTNAME=sascop-db.abc123.us-east-1.rds.amazonaws.com
+
+# IP Address
+RDS_HOSTNAME=10.0.1.50
+```
+
+### RDS_PORT
+
+**Required:** No  
+**Default:** `'5432'`  
+**Purpose:** Database port
+
+```python bme_subtec/settings.py
+'PORT': os.environ.get('RDS_PORT', '5432'),
+```
+
+**Example:**
+```bash .env
+RDS_PORT=5432
+```
+
+## Email Configuration
+
+### EMAIL_HOST
+
+**Required:** Yes (for email functionality)  
+**Default:** `'smtp.gmail.com'`  
+**Purpose:** SMTP server hostname
+
+```python bme_subtec/settings.py
+EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+```
+
+**Example:**
+```bash .env
+# Gmail
+EMAIL_HOST=smtp.gmail.com
+
+# SendGrid
+EMAIL_HOST=smtp.sendgrid.net
+
+# AWS SES
+EMAIL_HOST=email-smtp.us-east-1.amazonaws.com
+```
+
+### EMAIL_PORT
+
+**Required:** No  
+**Default:** `587`  
+**Purpose:** SMTP server port
+
+```python bme_subtec/settings.py
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+```
+
+**Example:**
+```bash .env
+# TLS
+EMAIL_PORT=587
+
+# SSL
+EMAIL_PORT=465
+```
+
+### EMAIL_USE_TLS
+
+**Required:** No  
+**Default:** `True`  
+**Purpose:** Use TLS encryption
+
+```python bme_subtec/settings.py
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True") == "True"
+```
+
+**Example:**
+```bash .env
+EMAIL_USE_TLS=True
+```
+
+### EMAIL_HOST_USER
+
+**Required:** Yes (for email functionality)  
+**Default:** `''` (empty string)  
+**Purpose:** SMTP authentication username
+
+```python bme_subtec/settings.py
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+```
+
+**Example:**
+```bash .env
+# Gmail
+EMAIL_HOST_USER=your-email@gmail.com
+
+# SendGrid
+EMAIL_HOST_USER=apikey
+```
+
+### EMAIL_HOST_PASSWORD
+
+**Required:** Yes (for email functionality)  
+**Default:** `''` (empty string)  
+**Purpose:** SMTP authentication password
+
+```python bme_subtec/settings.py
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+```
+
+**Example:**
+```bash .env
+# Gmail App Password
+EMAIL_HOST_PASSWORD=abcd efgh ijkl mnop
+
+# SendGrid API Key
+EMAIL_HOST_PASSWORD=SG.xxxxxxxxxxxxxxxxxxxxxx
+```
+
+<Note>
+For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833) rather than your regular password.
+</Note>
+
+### DEFAULT_FROM_EMAIL
+
+**Required:** No  
+**Default:** `'SASCOP <noreply@SASCOP.com>'`  
+**Purpose:** Default sender email address
+
+```python bme_subtec/settings.py
+DEFAULT_FROM_EMAIL = os.getenv(
+    "DEFAULT_FROM_EMAIL",
+    "SASCOP <noreply@SASCOP.com>"
+)
+```
+
+**Example:**
+```bash .env
+DEFAULT_FROM_EMAIL=SASCOP BME SubTec <noreply@yourdomain.com>
+```
+
+## Payment Integration (OpenPay)
+
+### OPENPAY_MERCHANT_ID
+
+**Required:** No (only if using OpenPay)  
+**Default:** `''` (empty string)  
+**Purpose:** OpenPay merchant identifier
+
+```python bme_subtec/settings.py
+OPENPAY_MERCHANT_ID = os.getenv('OPENPAY_MERCHANT_ID', '')
+```
+
+**Example:**
+```bash .env
+OPENPAY_MERCHANT_ID=mywvupjjs9xdnryxtplq
+```
+
+### OPENPAY_PRIVATE_KEY
+
+**Required:** No (only if using OpenPay)  
+**Default:** `''` (empty string)  
+**Purpose:** OpenPay API private key
+
+```python bme_subtec/settings.py
+OPENPAY_PRIVATE_KEY = os.getenv('OPENPAY_PRIVATE_KEY', '')
+```
+
+**Example:**
+```bash .env
+OPENPAY_PRIVATE_KEY=sk_xxxxxxxxxxxxxxxx
+```
+
+### OPENPAY_PRODUCTION
+
+**Required:** No  
+**Default:** `False`  
+**Purpose:** Use OpenPay production environment
+
+```python bme_subtec/settings.py
+OPENPAY_PRODUCTION = os.getenv('OPENPAY_PRODUCTION', 'False') == 'True'
+```
+
+**Example:**
+```bash .env
+# Development/Sandbox
+OPENPAY_PRODUCTION=False
+
+# Production
+OPENPAY_PRODUCTION=True
+```
+
+## Complete .env Template
+
+### Development Environment
+
+```bash .env.development
+# Django Settings
+SECRET_KEY=django-insecure-dev-key-change-me
+DEBUG=True
+
+# Database - Local PostgreSQL
+RDS_DB_NAME=sascop_local
+RDS_USERNAME=postgres
+RDS_PASSWORD=postgres
+RDS_HOSTNAME=localhost
+RDS_PORT=5432
+
+# Email - Console Backend (No real emails sent)
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+DEFAULT_FROM_EMAIL=SASCOP Dev <dev@localhost>
+
+# OpenPay - Sandbox
+OPENPAY_MERCHANT_ID=
+OPENPAY_PRIVATE_KEY=
+OPENPAY_PRODUCTION=False
+```
+
+### Production Environment
+
+```bash .env.production
+# Django Settings
+SECRET_KEY=<generate-strong-secret-key>
+DEBUG=False
+ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com
+
+# Database - Production PostgreSQL
+RDS_DB_NAME=sascop_production
+RDS_USERNAME=sascop_prod_user
+RDS_PASSWORD=<strong-database-password>
+RDS_HOSTNAME=sascop-prod.abc123.us-east-1.rds.amazonaws.com
+RDS_PORT=5432
+
+# Email - SendGrid/SES
+EMAIL_HOST=smtp.sendgrid.net
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=apikey
+EMAIL_HOST_PASSWORD=<sendgrid-api-key>
+DEFAULT_FROM_EMAIL=SASCOP <noreply@yourdomain.com>
+
+# OpenPay - Production
+OPENPAY_MERCHANT_ID=<production-merchant-id>
+OPENPAY_PRIVATE_KEY=<production-private-key>
+OPENPAY_PRODUCTION=True
+```
+
+## Alternative Email Backend (Anymail)
+
+The application includes support for django-anymail (SendGrid, Mailgun, etc.):
+
+```python bme_subtec/settings.py
+# Commented out by default - Uncomment to use
+# EMAIL_BACKEND = "anymail.backends.sendgrid.EmailBackend"
+# ANYMAIL = {
+#    "SENDGRID_API_KEY": os.getenv("SENDGRID_API_KEY", ""),
+# }
+```
+
+### SENDGRID_API_KEY
+
+**Required:** No (only if using Anymail with SendGrid)  
+**Default:** `''` (empty string)
+
+**Example:**
+```bash .env
+SENDGRID_API_KEY=SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+## Platform-Specific Variables
+
+### Vercel
+
+When deploying to Vercel, set environment variables in the Vercel dashboard or using the Vercel CLI:
+
+```bash
+vercel env add SECRET_KEY production
+vercel env add RDS_DB_NAME production
+vercel env add RDS_USERNAME production
+# etc...
+```
+
+### AWS
+
+For AWS deployments, use Systems Manager Parameter Store or Secrets Manager:
+
+```bash
+aws ssm put-parameter \
+  --name "/sascop/SECRET_KEY" \
+  --value "your-secret-key" \
+  --type SecureString
+```
+
+### Docker
+
+Pass environment variables to Docker containers:
+
+```bash
+docker run -d \
+  -e SECRET_KEY="your-key" \
+  -e RDS_DB_NAME="sascop_prod" \
+  -e DEBUG=False \
+  sascop-app:latest
+```
+
+Or use an env file:
+
+```bash
+docker run -d --env-file .env.production sascop-app:latest
+```
+
+## Security Best Practices
+
+<Steps>
+  <Step title="Never Commit Secrets">
+    Ensure `.env` is in `.gitignore`:
+    ```gitignore
+    .env
+    .env.*
+    !.env.example
+    ```
+  </Step>
+
+  <Step title="Use Strong Passwords">
+    - Database passwords: At least 16 characters
+    - Secret keys: Use Django's key generator
+    - API keys: Rotate regularly
+  </Step>
+
+  <Step title="Separate Environments">
+    Use different credentials for each environment:
+    - `.env.development`
+    - `.env.staging`
+    - `.env.production`
+  </Step>
+
+  <Step title="Rotate Credentials">
+    Regularly rotate sensitive credentials, especially:
+    - Database passwords
+    - Secret keys (requires re-signing sessions)
+    - API keys
+  </Step>
+
+  <Step title="Use Secrets Management">
+    For production, use dedicated secrets management:
+    - AWS Secrets Manager
+    - HashiCorp Vault
+    - Azure Key Vault
+    - Google Secret Manager
+  </Step>
+</Steps>
+
+## Validating Environment Variables
+
+Create a management command to validate environment variables:
+
+```python core/management/commands/check_env.py
+from django.core.management.base import BaseCommand
+import os
+
+class Command(BaseCommand):
+    help = 'Check required environment variables'
+
+    def handle(self, *args, **options):
+        required_vars = [
+            'SECRET_KEY',
+            'RDS_DB_NAME',
+            'RDS_USERNAME',
+            'RDS_PASSWORD',
+            'RDS_HOSTNAME',
+        ]
+        
+        missing = []
+        for var in required_vars:
+            if not os.getenv(var):
+                missing.append(var)
+        
+        if missing:
+            self.stdout.write(
+                self.style.ERROR(
+                    f'Missing environment variables: {", ".join(missing)}'
+                )
+            )
+        else:
+            self.stdout.write(
+                self.style.SUCCESS('All required environment variables are set')
+            )
+```
+
+Run the check:
+
+```bash
+python manage.py check_env
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Overview" icon="rocket" href="/development/deployment/overview">
+    Learn about deployment strategies
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/development/deployment/database-migrations">
+    Manage database migrations in production
+  </Card>
+</CardGroup>

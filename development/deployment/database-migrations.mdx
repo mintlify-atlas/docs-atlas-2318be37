@@ -1,0 +1,676 @@
+---
+title: Database Migrations
+description: Managing Django database migrations in development and production environments
+---
+
+## Overview
+
+Django migrations are version control for your database schema. SASCOP BME SubTec uses migrations to manage database changes across multiple apps including `operaciones`, `core`, `costa_fuera`, and `reportes`.
+
+## How Migrations Work
+
+Django migrations track changes to your models and apply them to the database:
+
+1. **Model Change** - You modify a model in your code
+2. **Create Migration** - Run `makemigrations` to generate migration files
+3. **Apply Migration** - Run `migrate` to apply changes to the database
+4. **Track State** - Django tracks which migrations have been applied
+
+## Creating Migrations
+
+### Automatic Migration Generation
+
+When you modify models, Django can automatically generate migrations:
+
+```bash
+python manage.py makemigrations
+```
+
+For a specific app:
+
+```bash
+python manage.py makemigrations operaciones
+```
+
+**Example Output:**
+
+```
+Migrations for 'operaciones':
+  operaciones/migrations/0002_add_contrato_fields.py
+    - Add field fecha_inicio to contrato
+    - Add field fecha_termino to contrato
+    - Add field monto_mn to contrato
+    - Add field monto_usd to contrato
+```
+
+### Custom Migration Names
+
+Provide a descriptive name for your migration:
+
+```bash
+python manage.py makemigrations operaciones --name add_contract_dates
+```
+
+### Empty Migrations
+
+Create an empty migration for custom SQL or data migrations:
+
+```bash
+python manage.py makemigrations operaciones --empty --name populate_default_data
+```
+
+## Viewing Migrations
+
+### List All Migrations
+
+View migration status for all apps:
+
+```bash
+python manage.py showmigrations
+```
+
+**Example Output:**
+
+```
+operaciones
+ [X] 0001_initial
+ [X] 0002_add_contrato_fields
+ [ ] 0003_add_anexo_models
+core
+ [X] 0001_initial
+```
+
+`[X]` = Applied  
+`[ ]` = Not applied
+
+### View Specific App
+
+```bash
+python manage.py showmigrations operaciones
+```
+
+### View Migration SQL
+
+See the SQL that will be executed:
+
+```bash
+python manage.py sqlmigrate operaciones 0002
+```
+
+**Example Output:**
+
+```sql
+BEGIN;
+--
+-- Add field fecha_inicio to contrato
+--
+ALTER TABLE "contrato" ADD COLUMN "fecha_inicio" date NULL;
+--
+-- Add field fecha_termino to contrato
+--
+ALTER TABLE "contrato" ADD COLUMN "fecha_termino" date NULL;
+COMMIT;
+```
+
+## Applying Migrations
+
+### Apply All Pending Migrations
+
+```bash
+python manage.py migrate
+```
+
+### Apply Migrations for Specific App
+
+```bash
+python manage.py migrate operaciones
+```
+
+### Apply to Specific Migration
+
+```bash
+python manage.py migrate operaciones 0002
+```
+
+### Non-Interactive Mode (Production)
+
+Use `--noinput` to skip confirmations:
+
+```bash
+python manage.py migrate --noinput
+```
+
+<Note>
+Always use `--noinput` in automated deployment scripts.
+</Note>
+
+## Migration Files
+
+Migration files are stored in each app's `migrations/` directory:
+
+```
+operaciones/migrations/
+├── __init__.py
+├── 0001_initial.py
+├── 0002_add_contrato_fields.py
+└── 0003_add_anexo_models.py
+```
+
+### Migration File Structure
+
+```python operaciones/migrations/0002_add_contrato_fields.py
+from django.db import migrations, models
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('operaciones', '0001_initial'),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name='contrato',
+            name='fecha_inicio',
+            field=models.DateField(blank=True, null=True),
+        ),
+        migrations.AddField(
+            model_name='contrato',
+            name='fecha_termino',
+            field=models.DateField(blank=True, null=True),
+        ),
+    ]
+```
+
+## Data Migrations
+
+Create migrations that modify data, not schema:
+
+<Steps>
+  <Step title="Create Empty Migration">
+    ```bash
+    python manage.py makemigrations operaciones --empty --name populate_default_statuses
+    ```
+  </Step>
+
+  <Step title="Edit Migration File">
+    ```python operaciones/migrations/0004_populate_default_statuses.py
+    from django.db import migrations
+
+    def create_default_statuses(apps, schema_editor):
+        Estatus = apps.get_model('operaciones', 'Estatus')
+        
+        default_statuses = [
+            {'descripcion': 'Pendiente', 'nivel_afectacion': 1, 'activo': True},
+            {'descripcion': 'En Proceso', 'nivel_afectacion': 1, 'activo': True},
+            {'descripcion': 'Completado', 'nivel_afectacion': 1, 'activo': True},
+        ]
+        
+        for status_data in default_statuses:
+            Estatus.objects.create(**status_data)
+
+    def reverse_default_statuses(apps, schema_editor):
+        Estatus = apps.get_model('operaciones', 'Estatus')
+        Estatus.objects.filter(
+            descripcion__in=['Pendiente', 'En Proceso', 'Completado']
+        ).delete()
+
+    class Migration(migrations.Migration):
+
+        dependencies = [
+            ('operaciones', '0003_add_anexo_models'),
+        ]
+
+        operations = [
+            migrations.RunPython(create_default_statuses, reverse_default_statuses),
+        ]
+    ```
+  </Step>
+
+  <Step title="Apply Migration">
+    ```bash
+    python manage.py migrate operaciones
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Always provide a reverse operation for data migrations to support rollback.
+</Note>
+
+## Production Migration Strategy
+
+### Pre-Deployment Checklist
+
+<Steps>
+  <Step title="Test Migrations Locally">
+    ```bash
+    # Create fresh database
+    createdb sascop_test
+    
+    # Set test database in .env
+    RDS_DB_NAME=sascop_test
+    
+    # Run all migrations
+    python manage.py migrate
+    
+    # Verify application works
+    python manage.py runserver
+    ```
+  </Step>
+
+  <Step title="Review Migration SQL">
+    ```bash
+    # Check SQL for each new migration
+    python manage.py sqlmigrate operaciones 0005
+    ```
+    
+    Look for:
+    - Table locks
+    - Long-running operations
+    - Data loss risks
+  </Step>
+
+  <Step title="Backup Production Database">
+    ```bash
+    pg_dump -h $RDS_HOSTNAME -U $RDS_USERNAME $RDS_DB_NAME > backup_$(date +%Y%m%d_%H%M%S).sql
+    ```
+  </Step>
+
+  <Step title="Plan Downtime (if needed)">
+    Some migrations require downtime:
+    - Adding NOT NULL columns to large tables
+    - Changing column types
+    - Adding indexes to large tables
+  </Step>
+</Steps>
+
+### Deployment Migration Process
+
+<CodeGroup>
+
+```bash Zero-Downtime
+# 1. Deploy code (migrations not applied yet)
+git pull origin main
+pip install -r requirements.txt
+python manage.py collectstatic --noinput
+
+# 2. Apply migrations
+python manage.py migrate --noinput
+
+# 3. Restart application
+sudo systemctl restart gunicorn
+```
+
+```bash With-Downtime
+# 1. Enable maintenance mode
+touch maintenance.flag
+
+# 2. Stop application
+sudo systemctl stop gunicorn
+
+# 3. Deploy and migrate
+git pull origin main
+pip install -r requirements.txt
+python manage.py migrate --noinput
+python manage.py collectstatic --noinput
+
+# 4. Start application
+sudo systemctl start gunicorn
+
+# 5. Disable maintenance mode
+rm maintenance.flag
+```
+
+```bash Rollback
+# 1. Stop application
+sudo systemctl stop gunicorn
+
+# 2. Revert code
+git checkout previous-release-tag
+
+# 3. Rollback migrations
+python manage.py migrate operaciones 0003
+
+# 4. Restart application
+sudo systemctl start gunicorn
+```
+
+</CodeGroup>
+
+## Common Migration Operations
+
+### Adding a Field
+
+```python
+migrations.AddField(
+    model_name='contrato',
+    name='observaciones',
+    field=models.TextField(blank=True, null=True),
+)
+```
+
+### Removing a Field
+
+```python
+migrations.RemoveField(
+    model_name='contrato',
+    name='campo_obsoleto',
+)
+```
+
+### Renaming a Field
+
+```python
+migrations.RenameField(
+    model_name='contrato',
+    old_name='descripcion',
+    new_name='descripcion_contrato',
+)
+```
+
+### Adding an Index
+
+```python
+migrations.AddIndex(
+    model_name='conceptomaestro',
+    index=models.Index(fields=['partida_ordinaria'], name='idx_partida_ord'),
+)
+```
+
+### Creating a Table
+
+```python
+migrations.CreateModel(
+    name='NuevoModelo',
+    fields=[
+        ('id', models.BigAutoField(primary_key=True)),
+        ('descripcion', models.CharField(max_length=200)),
+        ('activo', models.BooleanField(default=True)),
+    ],
+    options={
+        'db_table': 'nuevo_modelo',
+    },
+)
+```
+
+### Running Custom SQL
+
+```python
+migrations.RunSQL(
+    sql="CREATE INDEX CONCURRENTLY idx_pte_fecha ON pte_header (fecha_creacion);",
+    reverse_sql="DROP INDEX idx_pte_fecha;"
+)
+```
+
+## Migration Dependencies
+
+Migrations can depend on migrations from other apps:
+
+```python
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('operaciones', '0004_previous_migration'),
+        ('core', '0002_core_migration'),  # Dependency on core app
+    ]
+
+    operations = [
+        # ...
+    ]
+```
+
+## Squashing Migrations
+
+Combine multiple migrations into one for better performance:
+
+```bash
+python manage.py squashmigrations operaciones 0001 0010
+```
+
+This creates a new migration that replaces migrations 0001-0010.
+
+<Warning>
+Only squash migrations after they've been applied to all environments.
+</Warning>
+
+## Handling Migration Conflicts
+
+### Conflict Scenario
+
+Two developers create migrations independently:
+
+```
+Branch A: 0005_add_field_a.py
+Branch B: 0005_add_field_b.py
+```
+
+### Resolution
+
+<Steps>
+  <Step title="Identify Conflict">
+    ```bash
+    python manage.py migrate
+    ```
+    
+    Error: "Conflicting migrations detected"
+  </Step>
+
+  <Step title="Merge Migrations">
+    Rename one migration:
+    ```bash
+    mv operaciones/migrations/0005_add_field_b.py operaciones/migrations/0006_add_field_b.py
+    ```
+    
+    Update dependencies in the renamed file:
+    ```python
+    dependencies = [
+        ('operaciones', '0005_add_field_a'),
+    ]
+    ```
+  </Step>
+
+  <Step title="Apply Migrations">
+    ```bash
+    python manage.py migrate
+    ```
+  </Step>
+</Steps>
+
+## Testing Migrations
+
+### Unit Test Migrations
+
+```python operaciones/tests/test_migrations.py
+from django.test import TestCase
+from django.apps import apps
+
+class MigrationTest(TestCase):
+    def test_default_statuses_created(self):
+        Estatus = apps.get_model('operaciones', 'Estatus')
+        
+        # Verify default statuses exist
+        self.assertTrue(
+            Estatus.objects.filter(descripcion='Pendiente').exists()
+        )
+        self.assertTrue(
+            Estatus.objects.filter(descripcion='En Proceso').exists()
+        )
+```
+
+### Integration Testing
+
+```bash
+# Create test database
+createdb sascop_migration_test
+
+# Run migrations from scratch
+RDS_DB_NAME=sascop_migration_test python manage.py migrate
+
+# Run tests
+RDS_DB_NAME=sascop_migration_test python manage.py test
+
+# Clean up
+dropdb sascop_migration_test
+```
+
+## Rollback Migrations
+
+### Rollback to Specific Migration
+
+```bash
+# Rollback to migration 0003
+python manage.py migrate operaciones 0003
+```
+
+### Rollback All Migrations for an App
+
+```bash
+python manage.py migrate operaciones zero
+```
+
+<Warning>
+Rolling back migrations can cause data loss. Always backup before rollback.
+</Warning>
+
+### Fake Migrations
+
+Mark migrations as applied without running them:
+
+```bash
+# Mark as applied
+python manage.py migrate operaciones 0005 --fake
+
+# Mark as not applied
+python manage.py migrate operaciones 0004 --fake
+```
+
+Use cases:
+- Manual schema changes already applied
+- Fixing migration state inconsistencies
+- Testing migration rollbacks
+
+## Best Practices
+
+<Steps>
+  <Step title="Always Review Generated Migrations">
+    Never blindly trust auto-generated migrations. Review:
+    - SQL output (`sqlmigrate`)
+    - Field types and constraints
+    - Default values
+    - Data loss potential
+  </Step>
+
+  <Step title="Keep Migrations Small">
+    One logical change per migration:
+    - Add field: one migration
+    - Populate data: separate migration
+    - Remove old field: third migration
+  </Step>
+
+  <Step title="Test Before Production">
+    ```bash
+    # Test on staging
+    python manage.py migrate --plan
+    python manage.py migrate
+    
+    # Verify application works
+    # Test rollback
+    ```
+  </Step>
+
+  <Step title="Never Edit Applied Migrations">
+    Once a migration is applied to any environment:
+    - Never modify it
+    - Create a new migration instead
+    - Exception: Migrations not yet in production
+  </Step>
+
+  <Step title="Commit Migrations to Version Control">
+    ```bash
+    git add operaciones/migrations/0005_new_migration.py
+    git commit -m "Add migration for contract dates"
+    ```
+  </Step>
+
+  <Step title="Document Complex Migrations">
+    ```python
+    class Migration(migrations.Migration):
+        """
+        Adds contract date fields and populates them from existing data.
+        
+        This migration:
+        1. Adds fecha_inicio and fecha_termino fields
+        2. Populates dates from anexo records
+        3. Adds database indexes for performance
+        
+        Rollback: Removes added fields and indexes
+        """
+        # ...
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Migration Fails Midway
+
+```bash
+# Check migration status
+python manage.py showmigrations
+
+# If migration is marked as applied but failed:
+python manage.py migrate operaciones 0004 --fake
+python manage.py migrate operaciones 0005
+```
+
+### Inconsistent Migration State
+
+```bash
+# Clear migration records
+python manage.py migrate operaciones zero --fake
+
+# Reapply all migrations
+python manage.py migrate operaciones --fake-initial
+```
+
+### Missing Migration Files
+
+If migration files are lost but database has them applied:
+
+```bash
+# Recreate initial migration
+python manage.py makemigrations operaciones --name recovered_initial
+
+# Mark as applied
+python manage.py migrate operaciones --fake
+```
+
+## Monitoring Migration Performance
+
+```python
+import time
+from django.db import migrations
+
+def time_consuming_operation(apps, schema_editor):
+    start = time.time()
+    # ... operation ...
+    duration = time.time() - start
+    print(f"Operation took {duration:.2f} seconds")
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.RunPython(time_consuming_operation),
+    ]
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Static Files" icon="file" href="/development/deployment/static-files">
+    Learn about managing static files in production
+  </Card>
+  
+  <Card title="Environment Variables" icon="key" href="/development/deployment/environment-variables">
+    Configure environment-specific settings
+  </Card>
+</CardGroup>

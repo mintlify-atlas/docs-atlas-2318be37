@@ -1,0 +1,435 @@
+---
+title: Work Order Scheduling
+description: Complete guide to scheduling, timeline management, and progress tracking for work orders
+---
+
+## Overview
+
+SASCOP tracks both planned and actual schedules for work orders, calculating progress based on time elapsed and step completion. The system supports dual timeline tracking for programmed vs. real execution dates.
+
+<Info>
+  Progress is calculated using a weighted formula: **70% time-based progress + 30% step completion**
+</Info>
+
+## Schedule Fields
+
+Each work order maintains four key date fields:
+
+<ParamField path="fecha_inicio_programado" type="date">
+  Planned start date for the work order
+</ParamField>
+
+<ParamField path="fecha_inicio_real" type="date">
+  Actual date when work began
+</ParamField>
+
+<ParamField path="fecha_termino_programado" type="date">
+  Planned completion date
+</ParamField>
+
+<ParamField path="fecha_termino_real" type="date">
+  Actual date when work was completed
+</ParamField>
+
+<ParamField path="plazo_dias" type="integer">
+  Total duration in days (calculated or manually set)
+</ParamField>
+
+## Progress Calculation Algorithm
+
+The system calculates progress metrics in the DataTable view:
+
+```python operaciones/views/ote.py
+today = date.today()
+
+for ot in ots:
+    detalles = ot.detalles.all()
+    total_pasos = detalles.count()
+    pasos_completados = detalles.filter(estatus_paso_id__in=[3]).count()
+    
+    progreso_pasos = 0
+    if total_pasos > 0:
+        progreso_pasos = int((pasos_completados / total_pasos) * 100)
+    
+    progreso_tiempo = 0
+    dias_restantes = 0
+    dias_transcurridos = 0
+    plazo_total = 0
+    
+    if ot.fecha_inicio_programado and ot.fecha_termino_programado:
+        fecha_inicio = ot.fecha_inicio_programado
+        fecha_termino = ot.fecha_termino_programado
+        
+        if fecha_inicio and fecha_termino:
+            plazo_total = (fecha_termino - fecha_inicio + timedelta(days=1)).days
+            if plazo_total > 0:
+                if today < fecha_inicio:
+                    progreso_tiempo = 0
+                    dias_restantes = plazo_total
+                elif today > fecha_termino:
+                    progreso_tiempo = 100
+                    dias_restantes = 0
+                    dias_transcurridos = plazo_total
+                else:
+                    dias_transcurridos = (today - fecha_inicio).days
+                    progreso_tiempo = int((dias_transcurridos / plazo_total) * 100)
+                    dias_restantes = max(0, plazo_total - dias_transcurridos)
+```
+
+### Progress Components
+
+<Steps>
+  <Step title="Step Progress Calculation">
+    Count completed steps (`estatus_paso_id = 3`) and divide by total steps
+    ```python
+    progreso_pasos = int((pasos_completados / total_pasos) * 100)
+    ```
+  </Step>
+  
+  <Step title="Time Progress Calculation">
+    Calculate elapsed days as percentage of total timeline
+    ```python
+    dias_transcurridos = (today - fecha_inicio).days
+    progreso_tiempo = int((dias_transcurridos / plazo_total) * 100)
+    ```
+  </Step>
+  
+  <Step title="Weighted Final Progress">
+    Combine both metrics with 70/30 weighting
+    ```python
+    progreso_final = int((progreso_tiempo * 0.7) + (progreso_pasos * 0.3))
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  If the current date is before the start date, progress is 0%. If after the end date, time progress is 100%.
+</Note>
+
+## Real vs. Programmed Progress
+
+The system tracks two parallel progress calculations:
+
+### Programmed Progress
+
+Based on planned dates (`fecha_inicio_programado` and `fecha_termino_programado`):
+
+```python operaciones/views/ote.py
+if ot.fecha_inicio_programado and ot.fecha_termino_programado:
+    fecha_inicio = ot.fecha_inicio_programado
+    fecha_termino = ot.fecha_termino_programado
+    
+    plazo_total = (fecha_termino - fecha_inicio + timedelta(days=1)).days
+    if plazo_total > 0:
+        if today < fecha_inicio:
+            progreso_tiempo = 0
+            dias_restantes = plazo_total
+        elif today > fecha_termino:
+            progreso_tiempo = 100
+            dias_restantes = 0
+            dias_transcurridos = plazo_total
+        else:
+            dias_transcurridos = (today - fecha_inicio).days
+            progreso_tiempo = int((dias_transcurridos / plazo_total) * 100)
+            dias_restantes = max(0, plazo_total - dias_transcurridos)
+```
+
+### Real Progress
+
+Based on actual execution dates (`fecha_inicio_real` and `fecha_termino_programado`):
+
+```python operaciones/views/ote.py
+if ot.fecha_inicio_real and ot.fecha_termino_programado:
+    fecha_inicio_r = ot.fecha_inicio_real
+    fecha_termino_r = ot.fecha_termino_programado
+
+    plazo_total_real = (fecha_termino_r - fecha_inicio_r).days + 1
+    
+    if plazo_total_real > 0:
+        if today < fecha_inicio_r:
+            progreso_tiempo_real = 0
+            dias_restantes_real = plazo_total_real
+            dias_transcurridos_real = 0
+        elif today > fecha_termino_r:
+            progreso_tiempo_real = 100
+            dias_restantes_real = 0
+            dias_transcurridos_real = plazo_total_real
+        else:
+            dias_transcurridos_real = (today - fecha_inicio_r).days
+            progreso_tiempo_real = int((dias_transcurridos_real / plazo_total_real) * 100)
+            dias_restantes_real = max(0, plazo_total_real - dias_transcurridos_real)
+
+progreso_final_real = int((progreso_tiempo_real * 0.7) + (progreso_pasos * 0.3))
+```
+
+<CardGroup cols={2}>
+  <Card title="Programmed Progress" icon="calendar-days">
+    Tracks adherence to the original plan using planned dates
+  </Card>
+  <Card title="Real Progress" icon="clock">
+    Reflects actual execution using real start date and planned end date
+  </Card>
+</CardGroup>
+
+## Progress Retrieval API
+
+Real-time progress data can be fetched via AJAX:
+
+```python operaciones/views/ote.py
+@require_http_methods(["GET"])
+@login_required
+def obtener_progreso_general_ot(request):
+    """
+    Obtener progreso general actualizado de una OT.
+    """
+    try:
+        ot_id = request.GET.get('ot_id')
+        
+        if not ot_id:
+            return JsonResponse({
+                'exito': False,
+                'detalles': 'ID de OT no proporcionado'
+            })
+        
+        try:
+            ot = OTE.objects.get(pk=ot_id) 
+        except OTE.DoesNotExist:
+            return JsonResponse({'exito': False, 'detalles': 'OT no encontrada'})
+
+        detalles = ot.detalles.all() 
+        total_pasos = detalles.count()
+        pasos_completados = detalles.filter(estatus_paso=3).count() 
+        
+        progreso_pasos = 0
+        if total_pasos > 0:
+            progreso_pasos = int((pasos_completados / total_pasos) * 100)
+
+        progreso_tiempo = 0
+        dias_restantes = 0
+        dias_transcurridos = 0
+        plazo_total = 0
+        today = date.today()
+
+        if ot.fecha_inicio_programado and ot.fecha_termino_programado:
+            fecha_inicio = ot.fecha_inicio_programado
+            fecha_termino = ot.fecha_termino_programado
+            
+            plazo_total = (fecha_termino - fecha_inicio).days + 1
+            
+            if plazo_total > 0:
+                if today < fecha_inicio:
+                    progreso_tiempo = 0
+                    dias_restantes = plazo_total
+                    dias_transcurridos = 0
+                elif today > fecha_termino:
+                    progreso_tiempo = 100
+                    dias_restantes = 0
+                    dias_transcurridos = plazo_total
+                else:
+                    dias_transcurridos = (today - fecha_inicio).days
+                    progreso_tiempo = int((dias_transcurridos / plazo_total) * 100)
+                    dias_restantes = max(0, plazo_total - dias_transcurridos)
+
+        progreso_final = int((progreso_tiempo * 0.7) + (progreso_pasos * 0.3))
+        progreso_final = min(100, max(0, progreso_final))
+
+        return JsonResponse({
+            'exito': True,
+            'ot_id': ot_id,
+            'progreso': progreso_final,
+            'progreso_pasos': progreso_pasos,
+            'pasos_completados': pasos_completados,
+            'total_pasos': total_pasos,
+            'dias_transcurridos': dias_transcurridos,
+            'plazo_total': plazo_total,
+            'dias_transcurridos_real': dias_transcurridos_real,
+            'plazo_total_real': plazo_total_real,
+            'progreso_tiempo': progreso_tiempo,
+            'dias_restantes': dias_restantes
+        })
+```
+
+### Response Format
+
+```json
+{
+  "exito": true,
+  "ot_id": "123",
+  "progreso": 65,
+  "progreso_pasos": 50,
+  "pasos_completados": 5,
+  "total_pasos": 10,
+  "dias_transcurridos": 45,
+  "plazo_total": 90,
+  "dias_transcurridos_real": 40,
+  "plazo_total_real": 85,
+  "progreso_tiempo": 50,
+  "dias_restantes": 45
+}
+```
+
+<ResponseField name="progreso" type="integer">
+  Overall progress percentage (0-100)
+</ResponseField>
+
+<ResponseField name="progreso_pasos" type="integer">
+  Step completion percentage
+</ResponseField>
+
+<ResponseField name="progreso_tiempo" type="integer">
+  Time-based progress percentage
+</ResponseField>
+
+<ResponseField name="dias_transcurridos" type="integer">
+  Days elapsed since programmed start
+</ResponseField>
+
+<ResponseField name="dias_restantes" type="integer">
+  Days remaining until programmed end
+</ResponseField>
+
+<ResponseField name="plazo_total" type="integer">
+  Total programmed duration in days
+</ResponseField>
+
+## Status Management
+
+Work order status affects timeline tracking:
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_ot(request):
+    """Cambiar estatus de OT"""
+    try:
+        ot_id = request.POST.get('ot_id')
+        nuevo_estatus_id = request.POST.get('nuevo_estatus_id')
+        comentario = request.POST.get('comentario', '')
+        fecha_entrega = request.POST.get('fecha_entrega', None)
+        
+        ot = OTE.objects.get(id=ot_id)
+        estatus_anterior = ot.id_estatus_ot_id
+        ot.id_estatus_ot_id = nuevo_estatus_id
+        ot.comentario = comentario
+
+        if int(nuevo_estatus_id) == 10 and int(estatus_anterior) != 10:
+            if fecha_entrega:
+                ot.fecha_termino_real = fecha_entrega
+            else:
+                ot.fecha_termino_real = datetime.now()
+        elif int(nuevo_estatus_id) != 10 and int(estatus_anterior) == 10:
+            ot.fecha_termino_real = None
+        
+        ot.save()
+```
+
+<Warning>
+  When status changes to `10` (TERMINADA/Completed), the `fecha_termino_real` is automatically set to today if not provided.
+</Warning>
+
+## Step Date Management
+
+Individual step dates can be updated independently:
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def actualizar_fecha_ot(request):
+    """Actualizar fechas de un paso de OT"""
+    try:
+        id_paso = request.POST.get('id_paso')
+        fecha = request.POST.get('fecha')
+        tipo = request.POST.get('tipo')
+        
+        paso_detalle = OTDetalle.objects.get(id=id_paso)
+        
+        if tipo == '1':
+            paso_detalle.fecha_inicio = fecha if fecha else None
+        elif tipo == '2':
+            paso_detalle.fecha_termino = fecha if fecha else None
+        elif tipo == '3':
+            paso_detalle.fecha_entrega = fecha if fecha else None
+            
+        paso_detalle.save()
+```
+
+<ParamField path="tipo" type="string" required>
+  Date type to update:
+  - `"1"`: Start date (`fecha_inicio`)
+  - `"2"`: End date (`fecha_termino`)
+  - `"3"`: Delivery date (`fecha_entrega`)
+</ParamField>
+
+## Yard Phase Scheduling
+
+For work orders requiring yard phases:
+
+```python operaciones/models/ote_models.py
+requiere_patio = models.BooleanField(default=False, verbose_name="Requiere Fase en Patio")
+fecha_inicio_patio = models.DateField(blank=True, null=True, verbose_name="Inicio Fase Patio")
+fecha_fin_patio = models.DateField(blank=True, null=True, verbose_name="Fin Fase Patio")
+```
+
+<Info>
+  Yard phase dates track the land-based preparation period before offshore deployment. This is separate from the main work order timeline.
+</Info>
+
+## DataTable Progress Display
+
+The progress data is returned in the DataTable API for grid display:
+
+```python operaciones/views/ote.py
+data.append({
+    'id': ot.id,
+    'orden_trabajo': ot.orden_trabajo,
+    'total_pasos': total_pasos,
+    'pasos_completados': pasos_completados,
+    'progreso_pasos': progreso_pasos,
+    'progreso_tiempo': progreso_tiempo,
+    'progreso_final': progreso_final,
+    'dias_restantes': dias_restantes,
+    'dias_transcurridos': dias_transcurridos,
+    'plazo_total': plazo_total,
+    'progreso_tiempo_real': progreso_tiempo_real,
+    'progreso_final_real': progreso_final_real,
+    'dias_restantes_real': dias_restantes_real,
+    'dias_transcurridos_real': dias_transcurridos_real,
+    'plazo_total_real': plazo_total_real,
+})
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Set Planned Dates">
+    Both `fecha_inicio_programado` and `fecha_termino_programado` should be set to enable progress tracking. Without these, time-based progress will be 0%.
+  </Accordion>
+
+  <Accordion title="Update Real Dates Promptly">
+    Set `fecha_inicio_real` when work actually begins to track schedule variance. The system compares real vs. programmed timelines.
+  </Accordion>
+
+  <Accordion title="Complete Steps Systematically">
+    Mark steps complete (`estatus_paso_id = 3`) to maintain accurate overall progress. Step progress contributes 30% to the final percentage.
+  </Accordion>
+
+  <Accordion title="Monitor Both Progress Metrics">
+    Review both `progreso_final` (programmed) and `progreso_final_real` (actual) to identify schedule delays early.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Reprogramming" icon="rotate" href="/features/ote/reprogramming">
+    Handle schedule changes and create reprogrammed orders
+  </Card>
+  <Card title="Step Management" icon="list-check" href="/features/ote/creating-work-orders">
+    Manage workflow steps and deliverables
+  </Card>
+  <Card title="Import Schedules" icon="file-import" href="/features/ote/import-annexes">
+    Import project schedules from Excel and MPP files
+  </Card>
+</CardGroup>

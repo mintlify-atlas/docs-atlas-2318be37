@@ -1,0 +1,555 @@
+---
+title: 'Production API'
+description: 'API endpoints for production tracking and reporting'
+icon: 'chart-line'
+---
+
+## Overview
+
+The Production API manages daily production reporting, monthly reports, GPU (Generadores de Precio Unitario) tracking, and estimations for subsea operations.
+
+## URL Patterns
+
+From `operaciones/urls.py:59-74`:
+
+```python
+# Production URLs
+path('produccion/', produccion.lista_produccion, name='lista_produccion'),
+path('produccion/obtener_sitios_con_ots_ejecutadas/', produccion.obtener_sitios_con_ots_ejecutadas),
+path('produccion/ots_por_sitio_grid/', produccion.ots_por_sitio_grid),
+path('produccion/obtener_partidas_produccion/', produccion.obtener_partidas_produccion),
+path('produccion/guardar_produccion_masiva/', produccion.guardar_produccion_masiva),
+path('produccion/buscar_productos_catalogo/', produccion.buscar_productos_catalogo),
+path('produccion/vincular_partida_ot/', produccion.vincular_partida_ot),
+path('produccion/guardar_reportes_diarios_masiva/', produccion.guardar_reportes_diarios_masiva),
+path('produccion/guardar_archivo_mensual/', produccion.guardar_archivo_mensual),
+path('produccion/obtener_supers_por_sitio/', produccion.obtener_supers_por_sitio),
+path('produccion/configurar_ciclo_guardia/', produccion.configurar_ciclo_guardia),
+path('produccion/obtener_guardias_mes/', produccion.obtener_guardias_mes),
+path('produccion/obtener_grid_gpus/', produccion.obtener_grid_gpus),
+path('produccion/guardar_estatus_gpu/', produccion.guardar_estatus_gpu),
+path('produccion/obtener_arbol_mpp/', produccion.obtener_arbol_mpp),
+```
+
+## Key Endpoints
+
+### Get Sites with Executed OTs
+
+Retrieve all sites that have work orders in execution.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/produccion/obtener_sitios_con_ots_ejecutadas/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token"
+```
+
+```python Python
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/produccion/obtener_sitios_con_ots_ejecutadas/',
+    headers={'X-CSRFToken': csrf_token}
+)
+
+sites = response.json()['sitios']
+for site in sites:
+    print(f"{site['id']}: {site['descripcion']} - {site['total_ots']} OTs")
+```
+</CodeGroup>
+
+<ResponseExample>
+```json Response
+{
+  "sitios": [
+    {
+      "id": 1,
+      "descripcion": "Plataforma Alfa",
+      "id_frente": 2,
+      "frente_descripcion": "Golfo de México",
+      "total_ots": 5
+    },
+    {
+      "id": 2,
+      "descripcion": "Embarcación Beta",
+      "id_frente": 1,
+      "frente_descripcion": "Costa Fuera",
+      "total_ots": 3
+    }
+  ]
+}
+```
+</ResponseExample>
+
+### Save Massive Production
+
+Submit multiple production records at once.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/produccion/guardar_produccion_masiva/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_ot": 1,
+    "mes": 3,
+    "anio": 2024,
+    "registros": [
+      {
+        "id_partida_anexo": 1,
+        "fecha_produccion": "2024-03-15",
+        "volumen_produccion": 25.5,
+        "tipo_tiempo": "TE",
+        "id_estatus_cobro": 1,
+        "id_sitio_produccion": 1
+      },
+      {
+        "id_partida_anexo": 2,
+        "fecha_produccion": "2024-03-15",
+        "volumen_produccion": 10.0,
+        "tipo_tiempo": "TE",
+        "id_estatus_cobro": 1,
+        "id_sitio_produccion": 1
+      }
+    ]
+  }'
+```
+
+```python Python
+production_data = {
+    'id_ot': 1,
+    'mes': 3,
+    'anio': 2024,
+    'registros': [
+        {
+            'id_partida_anexo': 1,
+            'fecha_produccion': '2024-03-15',
+            'volumen_produccion': 25.5,
+            'tipo_tiempo': 'TE',
+            'id_estatus_cobro': 1,
+            'id_sitio_produccion': 1
+        },
+        {
+            'id_partida_anexo': 2,
+            'fecha_produccion': '2024-03-15',
+            'volumen_produccion': 10.0,
+            'tipo_tiempo': 'TE',
+            'id_estatus_cobro': 1,
+            'id_sitio_produccion': 1
+        }
+    ]
+}
+
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/produccion/guardar_produccion_masiva/',
+    headers={'X-CSRFToken': csrf_token},
+    json=production_data
+)
+
+result = response.json()
+if result['success']:
+    print(f"Saved {result['registros_guardados']} production records")
+```
+</CodeGroup>
+
+<ParamField body="id_ot" type="integer" required>
+  Work order identifier
+</ParamField>
+
+<ParamField body="mes" type="integer" required>
+  Month (1-12)
+</ParamField>
+
+<ParamField body="anio" type="integer" required>
+  Year (e.g., 2024)
+</ParamField>
+
+<ParamField body="registros" type="array" required>
+  Array of production records
+  
+  <Expandable title="Production Record">
+    <ParamField body="id_partida_anexo" type="integer" required>
+      Reference to imported Anexo item
+    </ParamField>
+    
+    <ParamField body="fecha_produccion" type="string" required>
+      Production date (YYYY-MM-DD)
+    </ParamField>
+    
+    <ParamField body="volumen_produccion" type="number" required>
+      Volume produced (up to 6 decimal places)
+    </ParamField>
+    
+    <ParamField body="tipo_tiempo" type="string" required>
+      Time type: "TE" (Tiempo Efectivo) or "CMA" (Costo Mínimo Aplicado)
+    </ParamField>
+    
+    <ParamField body="id_estatus_cobro" type="integer" required>
+      Billing status ID
+    </ParamField>
+    
+    <ParamField body="id_sitio_produccion" type="integer">
+      Site where production occurred
+    </ParamField>
+    
+    <ParamField body="comentario" type="string">
+      Optional comments
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Save Daily Reports (Massive)
+
+Submit multiple daily operational status reports.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/produccion/guardar_reportes_diarios_masiva/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_ot": 1,
+    "mes": 3,
+    "anio": 2024,
+    "reportes": [
+      {
+        "fecha": "2024-03-15",
+        "id_estatus": 1,
+        "id_sitio": 1,
+        "comentario": "Operación normal"
+      },
+      {
+        "fecha": "2024-03-16",
+        "id_estatus": 2,
+        "id_sitio": 1,
+        "comentario": "Clima adverso - operaciones suspendidas"
+      }
+    ]
+  }'
+```
+
+```python Python
+daily_reports = {
+    'id_ot': 1,
+    'mes': 3,
+    'anio': 2024,
+    'reportes': [
+        {
+            'fecha': '2024-03-15',
+            'id_estatus': 1,  # Operativo
+            'id_sitio': 1,
+            'comentario': 'Operación normal'
+        },
+        {
+            'fecha': '2024-03-16',
+            'id_estatus': 2,  # Suspendido
+            'id_sitio': 1,
+            'comentario': 'Clima adverso'
+        }
+    ]
+}
+
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/produccion/guardar_reportes_diarios_masiva/',
+    headers={'X-CSRFToken': csrf_token},
+    json=daily_reports
+)
+```
+</CodeGroup>
+
+<ParamField body="id_ot" type="integer" required>
+  Work order identifier
+</ParamField>
+
+<ParamField body="mes" type="integer" required>
+  Month (1-12)
+</ParamField>
+
+<ParamField body="anio" type="integer" required>
+  Year
+</ParamField>
+
+<ParamField body="reportes" type="array" required>
+  Array of daily reports
+  
+  <Expandable title="Daily Report">
+    <ParamField body="fecha" type="string" required>
+      Report date (YYYY-MM-DD)
+    </ParamField>
+    
+    <ParamField body="id_estatus" type="integer" required>
+      Operational status (nivel_afectacion: 6)
+    </ParamField>
+    
+    <ParamField body="id_sitio" type="integer" required>
+      Site identifier
+    </ParamField>
+    
+    <ParamField body="comentario" type="string">
+      Brief observation about the day
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Configure Guard Cycle
+
+Set up superintendent rotation schedule for a site.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/produccion/configurar_ciclo_guardia/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_sitio": 1,
+    "id_super_a": 1,
+    "id_super_b": 2,
+    "fecha_inicio_super_a": "2024-01-01"
+  }'
+```
+
+```python Python
+guard_config = {
+    'id_sitio': 1,
+    'id_super_a': 1,
+    'id_super_b': 2,
+    'fecha_inicio_super_a': '2024-01-01'
+}
+
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/produccion/configurar_ciclo_guardia/',
+    headers={'X-CSRFToken': csrf_token},
+    json=guard_config
+)
+```
+</CodeGroup>
+
+<ParamField body="id_sitio" type="integer" required>
+  Site identifier
+</ParamField>
+
+<ParamField body="id_super_a" type="integer" required>
+  First superintendent ID
+</ParamField>
+
+<ParamField body="id_super_b" type="integer" required>
+  Second superintendent ID
+</ParamField>
+
+<ParamField body="fecha_inicio_super_a" type="string" required>
+  Start date for superintendent A's first shift (YYYY-MM-DD)
+</ParamField>
+
+### Get GPU Grid
+
+Retrieve GPU (Unit Price Generators) tracking grid for a specific month.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/produccion/obtener_grid_gpus/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_ot": 1,
+    "mes": 3,
+    "anio": 2024
+  }'
+```
+
+```python Python
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/produccion/obtener_grid_gpus/',
+    headers={'X-CSRFToken': csrf_token},
+    json={
+        'id_ot': 1,
+        'mes': 3,
+        'anio': 2024
+    }
+)
+
+gpu_grid = response.json()
+for gpu in gpu_grid['registros']:
+    print(f"Partida: {gpu['id_partida']} - Status: {gpu['estatus_gpu']}")
+```
+</CodeGroup>
+
+<ParamField body="id_ot" type="integer" required>
+  Work order identifier
+</ParamField>
+
+<ParamField body="mes" type="integer" required>
+  Month (1-12)
+</ParamField>
+
+<ParamField body="anio" type="integer" required>
+  Year
+</ParamField>
+
+## Production Models
+
+From `operaciones/models/produccion_models.py:63-88`:
+
+### Produccion Model
+
+```python
+class Produccion(models.Model):
+    TIPO_TIEMPO_CHOICES = [
+        ('TE', 'Tiempo Efectivo'),
+        ('CMA', 'Costo Mínimo Aplicado'),
+    ]
+    
+    id_partida_anexo = models.ForeignKey(PartidaAnexoImportada, on_delete=models.PROTECT)
+    id_reporte_mensual = models.ForeignKey(ReporteMensual, on_delete=models.CASCADE)
+    fecha_produccion = models.DateField()
+    volumen_produccion = models.DecimalField(max_digits=15, decimal_places=6)
+    tipo_tiempo = models.CharField(max_length=3, choices=TIPO_TIEMPO_CHOICES)
+    es_excedente = models.BooleanField(default=False)
+    id_estatus_cobro = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    comentario = models.TextField(blank=True)
+    id_sitio_produccion = models.ForeignKey(Sitio, on_delete=models.SET_NULL, null=True)
+    
+    class Meta:
+        unique_together = ['id_partida_anexo', 'fecha_produccion', 'tipo_tiempo', 'id_sitio_produccion']
+```
+
+### ReporteMensual Model
+
+```python
+class ReporteMensual(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE)
+    mes = models.IntegerField(help_text="Mes numérico (1-12)")
+    anio = models.IntegerField(help_text="Año (Ej. 2025)")
+    archivo = models.URLField(blank=True, null=True, verbose_name="Link Evidencia (Drive)")
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ['id_ot', 'mes', 'anio']
+```
+
+### ReporteDiario Model
+
+```python
+class ReporteDiario(models.Model):
+    id_reporte_mensual = models.ForeignKey(ReporteMensual, on_delete=models.CASCADE)
+    fecha = models.DateField()
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    comentario = models.CharField(max_length=255, blank=True, null=True)
+    bloqueado = models.BooleanField(default=False)
+    id_sitio = models.ForeignKey(Sitio, on_delete=models.CASCADE, null=True)
+    
+    class Meta:
+        unique_together = ['id_reporte_mensual', 'fecha', 'id_sitio']
+```
+
+### RegistroGPU Model
+
+```python
+class RegistroGPU(models.Model):
+    id_produccion = models.OneToOneField(Produccion, on_delete=models.CASCADE, related_name='gpu')
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    archivo = models.URLField(max_length=500, blank=True, null=True)
+    nota_bloqueo = models.TextField(blank=True, null=True)
+    id_estimacion_detalle = models.ForeignKey('EstimacionDetalle', on_delete=models.SET_NULL, null=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+```
+
+## Cronograma (Schedule) Models
+
+### CronogramaVersion
+
+```python
+class CronogramaVersion(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE)
+    nombre_version = models.CharField(max_length=150)
+    archivo_mpp = models.FileField(upload_to='operaciones/mpps/')
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    es_activo = models.BooleanField(default=True)
+    fecha_inicio_proyecto = models.DateField(null=True, blank=True)
+    fecha_fin_proyecto = models.DateField(null=True, blank=True)
+```
+
+### TareaCronograma
+
+```python
+class TareaCronograma(models.Model):
+    version = models.ForeignKey(CronogramaVersion, on_delete=models.CASCADE)
+    uid_project = models.IntegerField()
+    id_project = models.IntegerField()
+    wbs = models.CharField(max_length=50)
+    nombre = models.CharField(max_length=500)
+    nivel_esquema = models.IntegerField(default=0)
+    es_resumen = models.BooleanField(default=False)
+    padre_uid = models.IntegerField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True)
+    fecha_fin = models.DateField(null=True)
+    duracion_dias = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    porcentaje_mpp = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    porcentaje_completado = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    recursos = models.TextField(blank=True, default='')
+```
+
+## Superintendent Management
+
+### Superintendente Model
+
+```python
+class Superintendente(models.Model):
+    nombre = models.CharField(max_length=150)
+    sitio_asignado = models.ForeignKey('Sitio', on_delete=models.SET_NULL, null=True)
+    color = models.CharField(max_length=7, default="#3498db")
+    activo = models.BooleanField(default=True)
+```
+
+### CicloGuardia Model
+
+```python
+class CicloGuardia(models.Model):
+    sitio = models.OneToOneField('Sitio', on_delete=models.CASCADE)
+    super_a = models.ForeignKey(Superintendente, on_delete=models.CASCADE, related_name='ciclos_a')
+    super_b = models.ForeignKey(Superintendente, on_delete=models.CASCADE, related_name='ciclos_b')
+    fecha_inicio_super_a = models.DateField()
+```
+
+## Production Workflow
+
+<Steps>
+  <Step title="Create Monthly Report">
+    Create or retrieve the monthly report container for the OT
+  </Step>
+  
+  <Step title="Submit Daily Operational Status">
+    Record daily operational status (working, suspended, standby, etc.)
+  </Step>
+  
+  <Step title="Record Production Volumes">
+    Submit production volumes for each partida (line item)
+  </Step>
+  
+  <Step title="Track GPUs">
+    For C-2 and C-3 items, track GPU status and photographic evidence
+  </Step>
+  
+  <Step title="Close Monthly Report">
+    Update monthly report status and attach evidence link
+  </Step>
+</Steps>
+
+<Warning>
+  Production records have a **unique constraint** on:
+  - `id_partida_anexo`
+  - `fecha_produccion`
+  - `tipo_tiempo`
+  - `id_sitio_produccion`
+  
+  Duplicate records will be rejected.
+</Warning>
+
+## Related Documentation
+
+- [Production Models](/api/models/production) - Complete data model reference
+- [OTE API](/api/ote) - Work order management
+- [Catalogs API](/api/catalogs) - Sites and status catalogs

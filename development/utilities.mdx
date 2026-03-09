@@ -1,0 +1,562 @@
+---
+title: Utilities
+description: Comprehensive guide to utility functions and helpers in SASCOP BME SubTec
+---
+
+## Overview
+
+The SASCOP BME SubTec application provides a rich set of utility functions for common operations including email sending, PDF generation, chart creation, and database queries. These utilities are centralized in `core/utils.py`.
+
+## Color Palette
+
+The application uses a consistent color palette defined in `core/utils.py:29-35`:
+
+```python core/utils.py
+COLOR_FUERZA = "#f05523"      # Orange - Strength
+COLOR_SERIEDAD = "#20145f"    # Dark Purple - Seriousness
+COLOR_CONFIANZA = "#51c2eb"   # Light Blue - Trust
+COLOR_DINAMISMO = "#fad91f"   # Yellow - Dynamism
+COLOR_SOLIDEZ = "#54565a"     # Gray - Solidity
+
+PALETA_SASCOP = [COLOR_FUERZA, COLOR_SOLIDEZ, COLOR_DINAMISMO, COLOR_CONFIANZA, COLOR_SERIEDAD]
+```
+
+**Status Colors:**
+
+```python core/utils.py
+COLOR_CARGADOS = "#00a65a"    # Green - Loaded files
+COLOR_NULOS = "#dd4b39"       # Red - Null/missing files
+COLOR_TEXTO_BLANCO = "#ffffff" # White text
+```
+
+## Database Utilities
+
+### ejecutar_query_sql
+
+Execute raw SQL queries with parameter binding.
+
+**Location:** `core/utils.py:57-64`
+
+```python core/utils.py
+def ejecutar_query_sql(query, params=None, retornar_dict=True):
+    with connection.cursor() as cursor:
+        cursor.execute(query, params or ())
+        if retornar_dict:
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        else:
+            return cursor.fetchall()
+```
+
+**Usage:**
+
+```python
+from core.utils import ejecutar_query_sql
+
+# Query with parameters
+sql = """
+    SELECT * FROM pte_header 
+    WHERE fecha >= %s AND fecha <= %s
+"""
+resultados = ejecutar_query_sql(sql, ['2024-01-01', '2024-12-31'])
+
+# Returns list of dictionaries
+for row in resultados:
+    print(row['id'], row['descripcion'])
+```
+
+### fn_ejecutar_query_sql_lotes
+
+Execute queries and fetch results in batches to avoid memory issues with large datasets.
+
+**Location:** `core/utils.py:639-656`
+
+```python core/utils.py
+def fn_ejecutar_query_sql_lotes(sql, parametros=None, tamano_lote=2000):
+    """
+    Ejecuta una consulta SQL y devuelve un iterador (generador) por lotes.
+    Diseñada exclusivamente para exportaciones masivas sin saturar la RAM.
+    Extrae de 2000 en 2000 registros de la base de datos.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, parametros)
+        columnas = [columna[0] for columna in cursor.description]
+
+        while True:
+            resultados_lote = cursor.fetchmany(tamano_lote)
+            
+            if not resultados_lote:
+                break
+            
+            for fila in resultados_lote:
+                yield dict(zip(columnas, fila))
+```
+
+**Usage:**
+
+```python
+from core.utils import fn_ejecutar_query_sql_lotes
+
+# Process large dataset in batches
+sql = "SELECT * FROM pte_detalle WHERE estatus_paso_id != 14"
+
+for registro in fn_ejecutar_query_sql_lotes(sql):
+    # Process each record without loading everything into memory
+    process_record(registro)
+```
+
+<Note>
+Use this function for large exports (Excel, CSV) to prevent memory exhaustion.
+</Note>
+
+## Reporting Utilities
+
+### fn_obtener_resumen_actividad_por_usuario
+
+Get activity summary by user for a date range.
+
+**Location:** `core/utils.py:65-123`
+
+```python core/utils.py
+def fn_obtener_resumen_actividad_por_usuario(fecha_inicio, fecha_fin):
+    sql = """
+        WITH resumen_totales AS (
+            SELECT
+                usuario_id_id,
+                COUNT(*) AS actividad_total
+            FROM
+                registro_actividad
+            WHERE
+                fecha >= %s AND
+                fecha <= %s
+            GROUP BY
+                usuario_id_id
+            ORDER BY
+                actividad_total DESC
+            LIMIT 10
+        )
+        SELECT
+            ra.usuario_id_id,
+            COUNT(*) AS total_por_modulo,
+            ra.tabla_log,
+            CONCAT_WS(' ', au.first_name, au.last_name) AS nombre_usuario,
+            CASE
+                WHEN ra.tabla_log = 0 THEN 'Cabecera PTE'
+                WHEN ra.tabla_log = 1 THEN 'Pasos PTE'
+                WHEN ra.tabla_log = 4 THEN 'Cabecera OT'
+                WHEN ra.tabla_log = 5 THEN 'Pasos OT'
+                ELSE 'OTRO'
+            END AS nombre_modulo
+        FROM
+            registro_actividad ra
+        INNER JOIN auth_user au ON
+            ra.usuario_id_id = au.id
+        WHERE
+            ra.usuario_id_id IN (
+                SELECT usuario_id_id FROM resumen_totales
+            ) AND
+            ra.fecha >= %s AND
+            ra.fecha <= %s
+        GROUP BY
+            ra.usuario_id_id, ra.tabla_log, au.first_name, au.last_name
+        ORDER BY (
+            SELECT actividad_total
+            FROM resumen_totales
+            WHERE resumen_totales.usuario_id_id = ra.usuario_id_id
+        ) DESC, total_por_modulo DESC;
+    """
+
+    params = [fecha_inicio, fecha_fin, fecha_inicio, fecha_fin]
+    return ejecutar_query_sql(sql, params)
+```
+
+**Usage:**
+
+```python
+from datetime import date
+from core.utils import fn_obtener_resumen_actividad_por_usuario
+
+resumen = fn_obtener_resumen_actividad_por_usuario(
+    fecha_inicio=date(2024, 1, 1),
+    fecha_fin=date(2024, 1, 31)
+)
+
+for actividad in resumen:
+    print(f"{actividad['nombre_usuario']}: {actividad['total_por_modulo']} operations")
+```
+
+### fn_obtener_resumen_pasos_cargados
+
+Get summary of loaded PTE step files.
+
+**Location:** `core/utils.py:125-146`
+
+```python core/utils.py
+def fn_obtener_resumen_pasos_cargados():
+    sql = """
+        SELECT
+            COUNT(pte_detalle.archivo) AS archivos_cargados,
+            COUNT(*) FILTER (WHERE pte_detalle.archivo IS NULL) AS archivos_nulos,
+            COUNT(*) AS total_registros,
+            pte_header.id_responsable_proyecto_id,
+            CONCAT_WS(' ', responsable_proyecto.descripcion) AS nombre_usuario
+        FROM
+            pte_detalle
+        INNER JOIN pte_header ON
+            pte_header.id = id_pte_header_id
+        INNER JOIN responsable_proyecto ON
+            pte_header.id_responsable_proyecto_id = responsable_proyecto.id
+        WHERE
+            pte_detalle.estatus_paso_id != 14 AND pte_header.estatus !=0
+        GROUP BY
+            responsable_proyecto.id, pte_header.id_responsable_proyecto_id, nombre_usuario
+        ORDER BY
+            archivos_cargados DESC;
+    """
+    return ejecutar_query_sql(sql)
+```
+
+### fn_obtener_resumen_ot_pasos_cargados
+
+Get summary of loaded OT step files.
+
+**Location:** `core/utils.py:148-169`
+
+```python core/utils.py
+def fn_obtener_resumen_ot_pasos_cargados():
+    sql = """
+        SELECT
+            COUNT(ot_detalle.archivo) AS archivos_cargados,
+            COUNT(*) FILTER (WHERE ot_detalle.archivo IS NULL) AS archivos_nulos,
+            COUNT(*) AS total_registros,
+            ot.id_responsable_proyecto_id,
+            CONCAT_WS(' ', responsable_proyecto.descripcion) AS nombre_usuario
+        FROM
+            ot_detalle
+        INNER JOIN ot ON
+            ot.id = id_ot_id
+        INNER JOIN responsable_proyecto ON
+            ot.id_responsable_proyecto_id = responsable_proyecto.id
+        WHERE
+            ot_detalle.estatus_paso_id != 14 AND ot.estatus !=0
+        GROUP BY
+            responsable_proyecto.id, ot.id_responsable_proyecto_id, nombre_usuario
+        ORDER BY
+            archivos_cargados DESC;
+    """
+    return ejecutar_query_sql(sql)
+```
+
+## Chart Generation
+
+### fn_obtener_color_texto
+
+Calculate appropriate text color (black or white) based on background color luminance.
+
+**Location:** `core/utils.py:50-55`
+
+```python core/utils.py
+def fn_obtener_color_texto(hex_color):
+    """Calcula si el texto debe ser blanco o negro según el fondo."""
+    rgb = mcolors.hex2color(hex_color)
+    luminancia = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+    return "black" if luminancia > 0.5 else "white"
+```
+
+**Usage:**
+
+```python
+from core.utils import fn_obtener_color_texto
+
+bg_color = "#f05523"
+text_color = fn_obtener_color_texto(bg_color)  # Returns "white"
+```
+
+### fn_generar_grafica_buffer
+
+Generate stacked bar chart for user activity.
+
+**Location:** `core/utils.py:172-228` and `core/utils.py:399-455`
+
+```python core/utils.py
+def fn_generar_grafica_buffer(datos_queryset):
+    """Genera la gráfica de Resumen de Actividades por usuario."""
+    datos_organizados = {}
+    tipos_registro = set()
+
+    mapeo_colores = {
+        "Pasos PTE": COLOR_FUERZA,
+        "Pasos OT": COLOR_SOLIDEZ,
+        "Cabecera PTE": COLOR_CONFIANZA,
+        "Cabecera OT": COLOR_DINAMISMO
+    }
+
+    for fila in datos_queryset:
+        usuario = fila["nombre_usuario"]
+        tipo = fila["nombre_modulo"]
+        cantidad = fila["total_por_modulo"]
+        if usuario not in datos_organizados:
+            datos_organizados[usuario] = {}
+
+        datos_organizados[usuario][tipo] = cantidad
+        tipos_registro.add(tipo)
+
+    lista_usuarios = list(datos_organizados.keys())
+    lista_tipos = sorted(list(tipos_registro))
+    nombres_ajustados = [textwrap.fill(nombre, width=15) for nombre in lista_usuarios]
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    acumulado_altura = [0] * len(lista_usuarios)
+
+    for tipo in lista_tipos:
+        valores = [datos_organizados[u].get(tipo, 0) for u in lista_usuarios]
+        color_segmento = mapeo_colores.get(tipo, COLOR_SOLIDEZ)
+        ax.bar(range(len(lista_usuarios)), valores, bottom=acumulado_altura,
+            label=tipo, color=color_segmento, width=0.6)
+        acumulado_altura = [s + v for s, v in zip(acumulado_altura, valores)]
+
+    max_y = max(acumulado_altura) if acumulado_altura else 100
+    ax.get_yaxis().set_major_formatter(ticker.StrMethodFormatter("{x:,.0f}"))
+
+    ax.set_title("Resumen de Actividad por Usuario", pad=25, fontsize=12, 
+                 color=COLOR_SERIEDAD, fontweight="bold")
+    ax.legend(loc="upper right", fontsize=8, frameon=False)
+    ax.set_xticks(range(len(lista_usuarios)))
+    ax.set_xticklabels(nombres_ajustados, fontsize=8)
+
+    for s in ["top", "right"]: 
+        ax.spines[s].set_visible(False)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.3)
+
+    plt.tight_layout()
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format="png", dpi=120)
+    buffer.seek(0)
+    plt.close(fig)
+
+    return buffer
+```
+
+**Usage:**
+
+```python
+from core.utils import fn_obtener_resumen_actividad_por_usuario, fn_generar_grafica_buffer
+
+# Get data
+datos = fn_obtener_resumen_actividad_por_usuario('2024-01-01', '2024-01-31')
+
+# Generate chart
+buffer = fn_generar_grafica_buffer(datos)
+
+# Save to file
+with open('activity_chart.png', 'wb') as f:
+    f.write(buffer.getvalue())
+```
+
+### fn_crear_grafica_carga_archivos_pasos
+
+Create file upload progress charts with smooth curves.
+
+**Location:** `core/utils.py:457-528`
+
+```python core/utils.py
+def fn_crear_grafica_carga_archivos_pasos(nombres, cargados, nulos, titulo_grafica, porcentaje_fijo, mostrar_avance=False):
+    totales = [c + n for c, n in zip(cargados, nulos)]
+    fig, ax = plt.subplots(figsize=(11, 6))
+    x = np.arange(len(nombres))
+
+    if len(x) > 3:
+        x_smooth = np.linspace(x.min(), x.max(), 300)
+        spl = make_interp_spline(x, totales, k=3)
+        y_smooth = np.maximum(spl(x_smooth), 0)
+        ax.fill_between(x_smooth, y_smooth, color=COLOR_DINAMISMO, alpha=0.15, zorder=1)
+        ax.plot(x_smooth, y_smooth, color=COLOR_FUERZA, linewidth=2.5, zorder=2, label="Total esperado")
+
+    ax.bar(x, cargados, color=COLOR_CONFIANZA, width=0.6, zorder=3, label="Archivos cargados")
+    # ... rest of implementation
+```
+
+## Email Utilities
+
+### fn_enviar_correo_template
+
+Send HTML emails using Django templates with embedded images.
+
+**Location:** `core/utils.py:230-301` and `core/utils.py:303-374`
+
+```python core/utils.py
+def fn_enviar_correo_template(
+    asunto,
+    ruta_template,
+    contexto,
+    lista_destinatarios,
+    archivo_adjunto=None
+):
+    try:
+        if not lista_destinatarios: 
+            return False
+
+        mensaje_html = render_to_string(ruta_template, contexto)
+        mensaje_plano = strip_tags(mensaje_html)
+        origen = settings.DEFAULT_FROM_EMAIL
+
+        email = EmailMultiAlternatives(
+            subject=asunto,
+            body=mensaje_plano,
+            from_email=origen,
+            to=lista_destinatarios
+        )
+        email.attach_alternative(mensaje_html, "text/html")
+        email.mixed_subtype = 'related'
+        
+        # Attach logos
+        ruta_logo_bme = os.path.join(
+            settings.BASE_DIR, 'operaciones', 'static', 'operaciones', 
+            'images', 'logo_black_white_subtec.jpg'
+        )
+
+        if os.path.exists(ruta_logo_bme):
+            with open(ruta_logo_bme, 'rb') as f:
+                img1 = MIMEImage(f.read())
+                img1.add_header('Content-ID', '<logo_bme>')
+                img1.add_header('Content-Disposition', 'inline', 
+                              filename='logo_black_white_subtec.jpg')
+                email.attach(img1)
+
+        # Similar for SASCOP logo...
+
+        if archivo_adjunto:
+            nombre, contenido, mime = archivo_adjunto
+            email.attach(nombre, contenido, mime)
+
+        email.send(fail_silently=False)
+        return True
+
+    except Exception as error:
+        print(f"Error enviando correo: {error}")
+        return False
+```
+
+**Usage:**
+
+```python
+from core.utils import fn_enviar_correo_template
+
+contexto = {
+    'nombre_usuario': 'Juan Pérez',
+    'mensaje': 'Su reporte ha sido generado',
+}
+
+exito = fn_enviar_correo_template(
+    asunto='Reporte Semanal SASCOP',
+    ruta_template='core/correos/reporte_semanal.html',
+    contexto=contexto,
+    lista_destinatarios=['usuario@example.com'],
+    archivo_adjunto=('reporte.pdf', pdf_content, 'application/pdf')
+)
+
+if exito:
+    print("Email sent successfully")
+```
+
+### fn_enviar_correo_reporte_bi
+
+Send BI dashboard reports with charts and Excel attachments.
+
+**Location:** `core/utils.py:759-815`
+
+```python core/utils.py
+def fn_enviar_correo_reporte_bi(lista_destinatarios, graficas_base64, archivo_excel=None, mensaje_limite=""):
+    try:
+        contexto_template = {
+            "advertencia": mensaje_limite
+        }
+        
+        html_correo = render_to_string("core/correos/dashboards_centro_consultas.html", contexto_template)
+        texto_plano = strip_tags(html_correo)
+        
+        correo_obj = EmailMultiAlternatives(
+            subject="SASCOP | Reporte Ejecutivo de Centro de Consulta",
+            body=texto_plano,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=lista_destinatarios
+        )
+        correo_obj.attach_alternative(html_correo, "text/html")
+        
+        # Attach logos and PDF...
+        
+        if len(graficas_base64) > 0:
+            bytes_pdf = fn_generar_pdf_graficas(graficas_base64)
+            correo_obj.attach("Reporte_Graficas_BI.pdf", bytes_pdf, "application/pdf")
+        
+        if archivo_excel:
+            nombre_arch, contenido_arch, tipo_mime = archivo_excel
+            correo_obj.attach(nombre_arch, contenido_arch, tipo_mime)
+        
+        correo_obj.send(fail_silently=False)
+        return True
+        
+    except Exception as error_envio:
+        import traceback
+        print("Error al enviar correo BI:")
+        traceback.print_exc()
+        return False
+```
+
+## PDF Generation
+
+### fn_dibujar_elementos_fijos
+
+Draw header and footer elements on PDF pages.
+
+**Location:** `core/utils.py:376-397`
+
+```python core/utils.py
+def fn_dibujar_elementos_fijos(canvas, doc):
+    """Dibuja el encabezado y pie de página institucional."""
+    canvas.saveState()
+    ancho, alto = letter
+
+    canvas.setStrokeColor(colors.HexColor(COLOR_SERIEDAD))
+    canvas.setLineWidth(1)
+    canvas.line(50, 80, ancho - 50, 80)
+
+    canvas.setFillColor(colors.HexColor(COLOR_SERIEDAD))
+    canvas.setFont("Helvetica", 8)
+    direccion = "Calle 1 Sur, Lote 1-B, Puerto de Isla del Carmen, Patio GARZPROM 2, Cd. Del Carmen, Campeche. Tel. +52 (938) 286 1241"
+    canvas.drawCentredString(ancho / 2, 68, direccion)
+
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawCentredString(ancho / 2, 55, "www.bluemarine.com.mx")
+
+    canvas.setFont("Helvetica-Oblique", 7)
+    canvas.setFillColor(colors.gray)
+    canvas.drawRightString(ancho - 50, 35, f"Generado automáticamente por SASCOP | Página {doc.page}")
+
+    canvas.restoreState()
+```
+
+### fn_generar_pdf_reporte
+
+Generate comprehensive PDF reports with charts and tables.
+
+**Location:** `core/utils.py:577-636`
+
+### fn_generar_pdf_graficas
+
+Generate PDF with embedded base64 charts.
+
+**Location:** `core/utils.py:684-757`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Overview" icon="rocket" href="/development/deployment/overview">
+    Learn about deploying the application
+  </Card>
+  
+  <Card title="Project Structure" icon="folder-tree" href="/development/project-structure">
+    Understand the codebase organization
+  </Card>
+</CardGroup>

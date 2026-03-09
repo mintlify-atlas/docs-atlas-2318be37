@@ -1,0 +1,367 @@
+---
+title: "Creating PTEs"
+description: "Learn how to create and configure new PTE records with proper validation and workflow initialization"
+icon: "file-plus"
+---
+
+## Overview
+
+Creating a PTE (Proyecto de Trabajo Especial) involves initializing both the header record with project information and automatically generating the appropriate workflow steps based on the client type.
+
+## PTE Creation Endpoint
+
+The PTE creation is handled by the `crear_pte` view function:
+
+**URL:** `/pte/crear/`  
+**Method:** `POST`  
+**Authentication:** Required (`@login_required`)  
+**Activity Logging:** Enabled (`@registrar_actividad`)
+
+## Required Fields
+
+<ParamField path="id_cliente" type="integer" required>
+  Client ID - Must reference an active client record
+</ParamField>
+
+<ParamField path="responsable_proyecto" type="integer" required>
+  Project manager ID - Must reference an active ResponsableProyecto
+</ParamField>
+
+<ParamField path="id_tipo" type="integer" required>
+  PTE type ID - Must have `nivel_afectacion=1`
+</ParamField>
+
+<ParamField path="plazo_dias" type="integer" required>
+  Deadline in days - Must be greater than 0
+</ParamField>
+
+<ParamField path="id_prioridad" type="integer" required>
+  Priority level for the PTE
+</ParamField>
+
+## Optional Fields
+
+<ParamField path="oficio_pte" type="string" default="SIN FOLIO">
+  PTE official document number
+</ParamField>
+
+<ParamField path="oficio_solicitud" type="string" default="PENDIENTE">
+  Request document number
+</ParamField>
+
+<ParamField path="descripcion_trabajo" type="string" default="POR DEFINIR">
+  Detailed work description
+</ParamField>
+
+<ParamField path="fecha_solicitud" type="date">
+  Request date in YYYY-MM-DD format
+</ParamField>
+
+<ParamField path="fecha_entrega" type="date">
+  Delivery date in YYYY-MM-DD format
+</ParamField>
+
+<ParamField path="total_homologado" type="decimal" default="0.00">
+  Standardized total amount
+</ParamField>
+
+<ParamField path="oficio_ot" type="string">
+  Associated work order document number
+</ParamField>
+
+<ParamField path="comentario_general" type="string">
+  General comments about the PTE
+</ParamField>
+
+## Implementation Code
+
+Here's the actual implementation from `pte.py:496-607`:
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def crear_pte(request):
+    """Crear PTE con header y detalles"""
+    try:
+        get_val = lambda k, d=None, t=str: t(v) if (v := request.POST.get(k, '').strip()) else d
+        
+        oficio_pte = get_val('oficio_pte', 'SIN FOLIO')
+        oficio_solicitud = get_val('oficio_solicitud', 'PENDIENTE')
+        descripcion_trabajo = get_val('descripcion_trabajo','POR DEFINIR')
+        responsable_proyecto = get_val('responsable_proyecto')
+        fecha_solicitud = get_val('fecha_solicitud')
+        fecha_entrega = get_val('fecha_entrega', None)
+        prioridad = get_val('id_prioridad')
+        plazo_dias = get_val('plazo_dias', 0, int)
+        id_tipo_id = get_val('id_tipo', None, int)
+        total_homologado = get_val('total_homologado', 0.00, float)
+        oficio_ot = get_val('oficio_ot', '')
+        comentario_general = get_val('comentario_general', '')
+        id_cliente = get_val('id_cliente')
+        
+        # Validation checks
+        if not id_cliente:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'El cliente es obligatorio'
+            })
+        if not responsable_proyecto:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'El responsable del proyecto es obligatorio'
+            })
+        
+        if not id_tipo_id:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'El tipo de PTE es obligatorio'
+            })
+        
+        if plazo_dias <= 0:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'El plazo en días debe ser mayor a 0'
+            })
+        
+        if not prioridad:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'La prioridad es obligatoria'
+            })
+        
+        # Create PTE Header
+        pte_header = PTEHeader.objects.create(
+            oficio_pte=oficio_pte,
+            oficio_solicitud=oficio_solicitud,
+            descripcion_trabajo=descripcion_trabajo,
+            id_responsable_proyecto_id=responsable_proyecto,
+            fecha_solicitud=fecha_solicitud,
+            prioridad = prioridad,
+            fecha_entrega=fecha_entrega,
+            plazo_dias=plazo_dias,
+            total_homologado=total_homologado,
+            id_tipo_id=id_tipo_id,
+            id_orden_trabajo=oficio_ot,
+            comentario=comentario_general,
+            id_cliente_id=id_cliente,
+            estatus=1  # Activo
+        )
+        
+        # Get client type and create workflow steps
+        clientes = Cliente.objects.get(id=id_cliente)
+        tipo_cliente = clientes.id_tipo_id
+
+        pasos = Paso.objects.filter(
+            activo=1, 
+            id_tipo_cliente_id=tipo_cliente
+        ).order_by('id', 'orden')
+
+        if not pasos:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': f'No se encontraron pasos para el tipo de cliente {tipo_cliente}'
+            })
+        
+        # Create detail records for each step
+        detalles_creados = []
+        for paso in pasos:
+            detalle = PTEDetalle.objects.create(
+                id_pte_header_id=pte_header.id,
+                id_paso_id=paso.id,
+                estatus_paso_id=1,  # Pendiente
+                comentario=''
+            )
+            detalles_creados.append(detalle.id)
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': f'PTE creado correctamente',
+            'id': pte_header.id,
+            'registro_id':pte_header.id,
+        })
+```
+
+<Note>
+The function uses a lambda helper `get_val` to extract and type-cast POST parameters with default values, making the code more concise.
+</Note>
+
+## Automatic Workflow Generation
+
+One of the key features of PTE creation is the **automatic workflow step generation** based on client type:
+
+<Steps>
+  <Step title="Retrieve Client Type">
+    The system gets the client record and extracts the `id_tipo_id` field
+    
+    ```python
+    clientes = Cliente.objects.get(id=id_cliente)
+    tipo_cliente = clientes.id_tipo_id
+    ```
+  </Step>
+  
+  <Step title="Query Matching Steps">
+    Fetch all active workflow steps configured for this client type
+    
+    ```python
+    pasos = Paso.objects.filter(
+        activo=1, 
+        id_tipo_cliente_id=tipo_cliente
+    ).order_by('id', 'orden')
+    ```
+  </Step>
+  
+  <Step title="Create Detail Records">
+    For each matching step, create a PTEDetalle record with initial "Pendiente" status
+    
+    ```python
+    for paso in pasos:
+        PTEDetalle.objects.create(
+            id_pte_header_id=pte_header.id,
+            id_paso_id=paso.id,
+            estatus_paso_id=1,
+            comentario=''
+        )
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+If no workflow steps are found for the client type, the PTE creation fails with an error message. Ensure that workflow steps are properly configured for each client type.
+</Warning>
+
+## Validation Rules
+
+The system enforces several validation rules:
+
+| Field | Validation | Error Message |
+|-------|------------|---------------|
+| `id_cliente` | Must not be empty | "El cliente es obligatorio" |
+| `responsable_proyecto` | Must not be empty | "El responsable del proyecto es obligatorio" |
+| `id_tipo` | Must not be empty | "El tipo de PTE es obligatorio" |
+| `plazo_dias` | Must be > 0 | "El plazo en días debe ser mayor a 0" |
+| `id_prioridad` | Must not be empty | "La prioridad es obligatoria" |
+
+## Response Format
+
+### Success Response
+
+```json
+{
+  "exito": true,
+  "tipo_aviso": "exito",
+  "detalles": "PTE creado correctamente",
+  "id": 123,
+  "registro_id": 123
+}
+```
+
+### Error Response
+
+```json
+{
+  "exito": false,
+  "tipo_aviso": "error",
+  "detalles": "El cliente es obligatorio"
+}
+```
+
+## Example Usage
+
+<CodeGroup>
+```javascript JavaScript
+const formData = new FormData();
+formData.append('id_cliente', '5');
+formData.append('responsable_proyecto', '2');
+formData.append('id_tipo', '1');
+formData.append('plazo_dias', '30');
+formData.append('id_prioridad', '1');
+formData.append('oficio_pte', 'PTE-2024-001');
+formData.append('descripcion_trabajo', 'Instalación de equipamiento');
+formData.append('fecha_solicitud', '2024-01-15');
+
+fetch('/pte/crear/', {
+  method: 'POST',
+  body: formData,
+  headers: {
+    'X-CSRFToken': getCookie('csrftoken')
+  }
+})
+.then(response => response.json())
+.then(data => {
+  if (data.exito) {
+    console.log('PTE created with ID:', data.id);
+  } else {
+    console.error('Error:', data.detalles);
+  }
+});
+```
+
+```python Python (requests)
+import requests
+
+data = {
+    'id_cliente': '5',
+    'responsable_proyecto': '2',
+    'id_tipo': '1',
+    'plazo_dias': '30',
+    'id_prioridad': '1',
+    'oficio_pte': 'PTE-2024-001',
+    'descripcion_trabajo': 'Instalación de equipamiento',
+    'fecha_solicitud': '2024-01-15'
+}
+
+response = requests.post(
+    'https://example.com/pte/crear/',
+    data=data,
+    cookies={'csrftoken': token}
+)
+
+result = response.json()
+if result['exito']:
+    print(f"PTE created with ID: {result['id']}")
+```
+</CodeGroup>
+
+## Editing PTEs
+
+To edit an existing PTE, use the `editar_pte` endpoint at `/pte/editar/`:
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def editar_pte(request):
+    pte_id = request.POST.get('id')
+    pte = get_object_or_404(PTEHeader, id=pte_id)
+    
+    # Update fields
+    pte.oficio_pte = request.POST.get('oficio_pte', pte.oficio_pte)
+    pte.descripcion_trabajo = request.POST.get('descripcion_trabajo', pte.descripcion_trabajo)
+    # ... more fields
+    
+    pte.save()
+```
+
+<Tip>
+The edit function uses `get_object_or_404` to ensure the PTE exists, returning a 404 error if not found.
+</Tip>
+
+## Related Operations
+
+<CardGroup cols={2}>
+  <Card title="Workflow Steps" icon="route" href="/features/pte/workflow-steps">
+    Manage the detailed workflow steps created automatically
+  </Card>
+  
+  <Card title="Status Tracking" icon="signal" href="/features/pte/status-tracking">
+    Track and update PTE status throughout the lifecycle
+  </Card>
+</CardGroup>

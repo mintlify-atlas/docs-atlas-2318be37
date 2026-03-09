@@ -1,0 +1,472 @@
+---
+title: Monthly Reports
+description: Consolidate daily reports and production data into monthly closures with evidence management
+icon: folder
+---
+
+## Overview
+
+Monthly Reports (ReporteMensual) serve as the container for all production activities in a specific month for a work order. They aggregate daily operational reports, production volumes, and evidence files for billing and auditing purposes.
+
+<Info>
+  Each work order can have only one monthly report per month, enforced by a unique constraint.
+</Info>
+
+## ReporteMensual Model
+
+<CodeGroup>
+```python produccion_models.py:22-43
+class ReporteMensual(models.Model):
+    """
+    Representa la 'Carpeta Mensual' de una OT.
+    Agrupa todos los reportes diarios y de producción de un mes específico.
+    """
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, related_name='reportes_mensuales', blank=True, null=True)
+    mes = models.IntegerField(help_text="Mes numérico (1-12)")
+    anio = models.IntegerField(help_text="Año (Ej. 2025)")
+    archivo = models.URLField(blank=True, null=True, verbose_name="Link Evidencia (Drive)")
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 5}, default=1, verbose_name="Estatus Cierre")
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'reporte_mensual_header'
+        unique_together = ['id_ot', 'mes', 'anio']
+        verbose_name = "Reporte Mensual"
+        verbose_name_plural = "Reportes Mensuales"
+
+    def __str__(self):
+        return f"Reporte {self.id_ot.orden_trabajo} - {self.mes}/{self.anio}"
+```
+</CodeGroup>
+
+### Field Descriptions
+
+<ParamField path="id_ot" type="ForeignKey(OTE)" required>
+  Parent work order for this monthly report
+  
+  **Relationship:** One work order can have many monthly reports (one per month)
+</ParamField>
+
+<ParamField path="mes" type="IntegerField" required>
+  Month number (1-12)
+  
+  **Validation:** Must be between 1 and 12
+</ParamField>
+
+<ParamField path="anio" type="IntegerField" required>
+  Year (e.g., 2025)
+  
+  **Format:** Four-digit year
+</ParamField>
+
+<ParamField path="archivo" type="URLField">
+  Google Drive link to consolidated evidence folder
+  
+  **Usage:** Points to monthly photo gallery, reports, and documentation
+</ParamField>
+
+<ParamField path="id_estatus" type="ForeignKey(Estatus)" default="1">
+  Closure status of the monthly report
+  
+  **Constraint:** `nivel_afectacion=5` (monthly closure statuses)
+  
+  **Common Values:**
+  - Abierto (Open)
+  - En Revisión (Under Review)
+  - Cerrado (Closed)
+  - Facturado (Invoiced)
+</ParamField>
+
+<ParamField path="fecha_creacion" type="DateTimeField" auto>
+  Timestamp when monthly report was first created
+</ParamField>
+
+<ParamField path="fecha_actualizacion" type="DateTimeField" auto>
+  Timestamp of last modification
+</ParamField>
+
+## Monthly Report Lifecycle
+
+<Steps>
+  <Step title="Automatic Creation">
+    Monthly report is automatically created when first daily report or production entry is recorded
+    
+    ```python
+    reporte_mensual, created = ReporteMensual.objects.get_or_create(
+        id_ot_id=id_ot,
+        mes=mes,
+        anio=anio,
+        defaults={'id_estatus_id': 1}  # Default: Abierto
+    )
+    ```
+  </Step>
+  
+  <Step title="Data Accumulation">
+    Throughout the month:
+    - Daily operational reports are added
+    - Production volumes are recorded
+    - GPU evidence is uploaded
+  </Step>
+  
+  <Step title="Evidence Upload">
+    At month end, consolidated evidence folder is created in Google Drive and linked
+  </Step>
+  
+  <Step title="Review and Closure">
+    Status changes to "En Revisión", then "Cerrado" after validation
+  </Step>
+  
+  <Step title="Billing Integration">
+    Closed monthly reports feed into estimation and invoicing processes
+  </Step>
+</Steps>
+
+## Saving Evidence Links
+
+The system provides an endpoint to attach Google Drive evidence to monthly reports.
+
+<CodeGroup>
+```python produccion.py:1012-1060
+@login_required
+@require_http_methods(["POST"])
+def guardar_archivo_mensual(request):
+    """
+    Guarda el enlace de archivo en el ReporteMensual
+    """
+    try:
+        data = json.loads(request.body)
+        
+        id_ot = data.get('id_ot')
+        mes = data.get('mes')
+        anio = data.get('anio')
+        url = data.get('archivo')
+        
+        if not all([id_ot, mes, anio]):
+            return JsonResponse({
+                'exito': False,
+                'mensaje': 'Faltan datos obligatorios (OT, Mes o Año).'
+            })
+
+        if not url:
+            return JsonResponse({
+                'exito': False,
+                'mensaje': 'La URL del archivo es obligatoria.'
+            })
+
+        with transaction.atomic():
+            reporte, created = ReporteMensual.objects.get_or_create(
+                id_ot_id=id_ot,
+                mes=int(mes),
+                anio=int(anio),
+                defaults={
+                    'id_estatus_id': 1
+                }
+            )
+
+            reporte.archivo = url
+            reporte.save()
+
+        return JsonResponse({
+            'exito': True,
+            'mensaje': 'Evidencia vinculada al Reporte Mensual correctamente.',
+            'archivo': reporte.archivo
+        })
+
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'mensaje': f'Error interno al guardar evidencia: {str(e)}'
+        }, status=500)
+```
+</CodeGroup>
+
+<Tip>
+  Always use shared Google Drive folders for evidence links. Ensure proper permissions are set so auditors and clients can access them.
+</Tip>
+
+## Related Data Structures
+
+### Child Relationships
+
+Monthly reports have two primary child relationships:
+
+<Tabs>
+  <Tab title="Daily Reports">
+    ```python
+    # Access all daily reports for a monthly report
+    monthly_report = ReporteMensual.objects.get(id_ot_id=123, mes=3, anio=2025)
+    daily_reports = monthly_report.dias_estatus.all()
+    
+    # Count productive days
+    productive_days = monthly_report.dias_estatus.filter(
+        id_estatus__descripcion='Productivo'
+    ).count()
+    ```
+  </Tab>
+  
+  <Tab title="Production Records">
+    ```python
+    # Access all production records for a monthly report
+    monthly_report = ReporteMensual.objects.get(id_ot_id=123, mes=3, anio=2025)
+    production_records = monthly_report.producciones.all()
+    
+    # Calculate total volume
+    from django.db.models import Sum
+    total_volume = monthly_report.producciones.aggregate(
+        total=Sum('volumen_produccion')
+    )['total']
+    ```
+  </Tab>
+</Tabs>
+
+## Monthly Closure Workflow
+
+<Warning>
+  Never close a monthly report until all production data has been verified and evidence uploaded. Closed reports may be locked from further editing.
+</Warning>
+
+### Pre-Closure Checklist
+
+<Accordion title="Data Completeness">
+  - [ ] All working days have daily operational reports
+  - [ ] Production volumes entered for all active budget line items
+  - [ ] GPU evidence uploaded for all C-2/C-3 production
+  - [ ] No pending validation errors or excess flags unresolved
+</Accordion>
+
+<Accordion title="Evidence Management">
+  - [ ] Monthly photo gallery organized in Google Drive
+  - [ ] Daily reports compiled into PDF or spreadsheet
+  - [ ] Special incident reports attached
+  - [ ] Drive folder link tested and accessible
+</Accordion>
+
+<Accordion title="Financial Verification">
+  - [ ] Production totals match daily reported volumes
+  - [ ] No unauthorized production exceeding contracted quantities
+  - [ ] Time classification (TE vs CMA) correctly assigned
+  - [ ] Unit prices current and accurate
+</Accordion>
+
+<Accordion title="Approval Chain">
+  - [ ] Site supervisor reviewed and approved
+  - [ ] Operations manager validated data
+  - [ ] Administrative team confirmed for billing
+  - [ ] Status changed to "Cerrado"
+</Accordion>
+
+## Querying Monthly Reports
+
+### Get or Create Pattern
+
+The system uses Django's `get_or_create` pattern extensively:
+
+<CodeGroup>
+```python produccion.py:240-245
+reporte_mensual, created = ReporteMensual.objects.get_or_create(
+    id_ot_id=id_ot,
+    mes=mes,
+    anio=anio,
+    defaults={'id_estatus_id': 1}
+)
+```
+</CodeGroup>
+
+<Info>
+  This pattern ensures a monthly report always exists before adding child records (daily reports or production), preventing orphaned data.
+</Info>
+
+### Filtering by Status
+
+```python
+# Get all open monthly reports
+open_reports = ReporteMensual.objects.filter(
+    id_estatus__descripcion='Abierto'
+)
+
+# Get closed reports for specific work order
+closed_reports = ReporteMensual.objects.filter(
+    id_ot__orden_trabajo='OTE-2025-001',
+    id_estatus__descripcion='Cerrado'
+).order_by('-anio', '-mes')
+
+# Get all reports for current month across all OTs
+from datetime import date
+today = date.today()
+current_month_reports = ReporteMensual.objects.filter(
+    mes=today.month,
+    anio=today.year
+)
+```
+
+## Integration with Production Grid
+
+The monthly report archives link is displayed in the production grid header:
+
+<CodeGroup>
+```python produccion.py:330-345
+archivo_url = ''
+dias_bloqueados = []
+
+try:
+    reporte = ReporteMensual.objects.filter(id_ot_id=id_ot, mes=mes, anio=anio).first()
+    if reporte:
+        dias_bloqueados = list(ReporteDiario.objects.filter(
+            id_reporte_mensual=reporte,
+            id_estatus_id=17,  # Cerrado status
+            id_sitio=id_sitio_int
+        ).values_list('fecha__day', flat=True))
+        
+        if reporte.archivo:
+            archivo_url = reporte.archivo
+except Exception:
+    pass
+```
+</CodeGroup>
+
+<Frame>
+  <img src="/images/monthly-report-link.png" alt="Monthly Report Evidence Link" />
+</Frame>
+
+## API Endpoint Reference
+
+<AccordionGroup>
+  <Accordion title="POST /produccion/guardar_archivo_mensual/" icon="code">
+    Saves or updates the Google Drive evidence link for a monthly report.
+    
+    **Request Body:**
+    ```json
+    {
+      "id_ot": 123,
+      "mes": 3,
+      "anio": 2025,
+      "archivo": "https://drive.google.com/drive/folders/..."
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+      "exito": true,
+      "mensaje": "Evidencia vinculada al Reporte Mensual correctamente.",
+      "archivo": "https://drive.google.com/drive/folders/..."
+    }
+    ```
+    
+    **Error Response:**
+    ```json
+    {
+      "exito": false,
+      "mensaje": "La URL del archivo es obligatoria."
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Database Constraints
+
+<Warning>
+  **Unique Constraint:** The combination of `[id_ot, mes, anio]` must be unique. Attempting to create a duplicate will raise an `IntegrityError`.
+</Warning>
+
+```python
+class Meta:
+    db_table = 'reporte_mensual_header'
+    unique_together = ['id_ot', 'mes', 'anio']
+```
+
+## Audit Trail
+
+Monthly reports maintain automatic audit timestamps:
+
+<CardGroup cols={2}>
+  <Card title="fecha_creacion" icon="calendar-plus">
+    Automatically set when record is first created
+    
+    **Usage:** Track when month was opened
+  </Card>
+  <Card title="fecha_actualizacion" icon="clock">
+    Automatically updated on every save
+    
+    **Usage:** Track last modification for audit trails
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Early Creation">
+    Don't wait until month end - monthly reports are auto-created with first data entry
+  </Step>
+  
+  <Step title="Consistent Evidence Structure">
+    Use consistent Google Drive folder naming:
+    ```
+    OTE-2025-001_Marzo_2025/
+      ├── Fotos_Diarias/
+      ├── Reportes_Operativos/
+      ├── GPU_Evidencias/
+      └── Incidentes/
+    ```
+  </Step>
+  
+  <Step title="Regular Status Updates">
+    Update closure status as month progresses:
+    - Days 1-25: "Abierto"
+    - Days 26-28: "En Revisión"
+    - Day 30+: "Cerrado"
+  </Step>
+  
+  <Step title="Lock After Billing">
+    Once invoiced, consider changing status to "Facturado" to prevent accidental modifications
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="IntegrityError: Duplicate Monthly Report">
+    **Cause:** Attempting to create multiple monthly reports for same OT and month.
+    
+    **Solution:** Always use `get_or_create()` instead of `create()`.
+    
+    ```python
+    # ❌ Wrong
+    ReporteMensual.objects.create(id_ot_id=123, mes=3, anio=2025)
+    
+    # ✅ Correct
+    ReporteMensual.objects.get_or_create(
+        id_ot_id=123, mes=3, anio=anio,
+        defaults={'id_estatus_id': 1}
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="Drive Link Returns 403 Forbidden">
+    **Cause:** Google Drive folder permissions not set to "Anyone with link can view".
+    
+    **Solution:**
+    1. Open folder in Google Drive
+    2. Click Share button
+    3. Change to "Anyone with the link"
+    4. Set permission to "Viewer"
+  </Accordion>
+  
+  <Accordion title="Monthly Report Shows Wrong Total">
+    **Cause:** Production records exist from previous status change or deleted line items.
+    
+    **Solution:** Filter by `id_partida_anexo__importacion_anexo__es_activo=True` to exclude deprecated line items.
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Daily Reports" icon="calendar-check" href="/features/production/daily-reports">
+    Learn about daily operational status tracking
+  </Card>
+  <Card title="Production Overview" icon="chart-line" href="/features/production/overview">
+    Return to production tracking overview
+  </Card>
+</CardGroup>

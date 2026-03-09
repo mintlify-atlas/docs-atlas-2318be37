@@ -1,0 +1,327 @@
+---
+title: 'OTE API'
+description: 'API endpoints for managing Work Orders (OTEs)'
+icon: 'clipboard-list'
+---
+
+## Overview
+
+The OTE (Work Order) API manages subsea work orders, including initial orders and reprogramming. OTEs can be linked to PTEs and include detailed step tracking, site assignments, and production data.
+
+## OTE Workflow
+
+OTEs follow this typical workflow:
+
+1. **Creation** - Created from a PTE or independently
+2. **Site Assignment** - Assigned to embarcaciones, plataformas, intercoms, or patios
+3. **Execution** - Steps tracked through completion
+4. **Reprogramming** - Can spawn reprogrammed OTs if needed
+5. **Completion** - Final status and production data recorded
+
+## URL Patterns
+
+From `operaciones/urls.py:34-52`:
+
+```python
+# OTE URLs
+path('ot/', ote.lista_ote, name='lista_ot'),
+path('ot/datatable/', ote.datatable_ot, name='datatable_ot'),
+path('ot/obtener_datos/', ote.obtener_datos_ot, name='obtener_datos_ot'),
+path('ot/obtener_ot_iniciales/', ote.obtener_ots_principales, name='obtener_ots_principales'),
+path('ot/eliminar/', ote.eliminar_ot, name='eliminar_ot'),
+path('ot/editar/', ote.editar_ot, name='editar_ot'),
+path('ot/crear-ot-reprogramacion/', ote.crear_ot, name='crear_ot'),
+path('ot/cambiar_estatus_ot/', ote.cambiar_estatus_ot, name='cambiar_estatus_ot'),
+path('ot/obtener_sitios_frente/', ote.obtener_sitios_por_frente, name='obtener_sitios_por_frente'),
+path('ot/detalle/datatable/', ote.datatable_ot_detalle, name='datatable_ot_detalle'),
+path('ot/cambiar_estatus_paso/', ote.cambiar_estatus_paso_ot, name='cambiar_estatus_paso_ot'),
+path('ot/actualizar-fecha/', ote.actualizar_fecha_ot, name='actualizar_fecha_ot'),
+path('ot/guardar_archivo_ot/', ote.guardar_archivo_ot, name='guardar_archivo_ot'),
+path('ot/obtener_sitios/', ote.obtener_sitios, name='obtener_sitios'),
+path('ot/obtener_progreso_general_ot/', ote.obtener_progreso_general_ot, name='obtener_progreso_general_ot'),
+path('ot/datatable-importaciones/', ote.datatable_importaciones, name='datatable_importaciones'),
+path('ot/importar_anexo_ot/', ote.importar_anexo_ot, name='importar_anexo_ot'),
+path('ot/importar-mpp/', ote.importar_mpp_ot, name='importar_mpp_ot'),
+```
+
+## Key Endpoints
+
+### Get OT Data
+
+Retrieve data for a specific work order.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/ot/obtener_datos/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{"ot_id": 1}'
+```
+
+```python Python
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/ot/obtener_datos/',
+    headers={'X-CSRFToken': csrf_token},
+    json={'ot_id': 1}
+)
+
+ot_data = response.json()
+print(f"Orden de Trabajo: {ot_data['orden_trabajo']}")
+print(f"Descripción: {ot_data['descripcion_trabajo']}")
+print(f"Estatus: {ot_data['id_estatus_ot']}")
+```
+</CodeGroup>
+
+<ParamField body="ot_id" type="integer" required>
+  The unique identifier of the work order
+</ParamField>
+
+### Get Sites by Front
+
+Retrieve all sites assigned to a specific front.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/ot/obtener_sitios_frente/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{"id_frente": 1}'
+```
+
+```python Python
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/ot/obtener_sitios_frente/',
+    headers={'X-CSRFToken': csrf_token},
+    json={'id_frente': 1}
+)
+
+sitios = response.json()['sitios']
+for sitio in sitios:
+    print(f"{sitio['id']}: {sitio['descripcion']}")
+```
+</CodeGroup>
+
+<ParamField body="id_frente" type="integer" required>
+  The front identifier to filter sites
+</ParamField>
+
+### Update OT Status
+
+Change the status of a work order.
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/ot/cambiar_estatus_ot/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ot_id": 1,
+    "nuevo_estatus": 3,
+    "comentario": "Trabajo completado exitosamente"
+  }'
+```
+
+```python Python
+response = session.post(
+    'https://api.sascop-bme-subtec.com/operaciones/ot/cambiar_estatus_ot/',
+    headers={'X-CSRFToken': csrf_token},
+    json={
+        'ot_id': 1,
+        'nuevo_estatus': 3,
+        'comentario': 'Trabajo completado exitosamente'
+    }
+)
+
+if response.json()['success']:
+    print("Status updated successfully")
+```
+</CodeGroup>
+
+<ParamField body="ot_id" type="integer" required>
+  The work order identifier
+</ParamField>
+
+<ParamField body="nuevo_estatus" type="integer" required>
+  New status: 1=Active, 2=In Process, 3=Completed, 4=Cancelled
+</ParamField>
+
+<ParamField body="comentario" type="string">
+  Optional comment explaining the status change
+</ParamField>
+
+### Import Anexo (Excel)
+
+Import production items from an Excel file (Anexo C).
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/ot/importar_anexo_ot/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -F "ot_id=1" \
+  -F "archivo_excel=@/path/to/anexo_c.xlsx"
+```
+
+```python Python
+with open('anexo_c.xlsx', 'rb') as f:
+    files = {'archivo_excel': f}
+    data = {'ot_id': 1}
+    
+    response = session.post(
+        'https://api.sascop-bme-subtec.com/operaciones/ot/importar_anexo_ot/',
+        headers={'X-CSRFToken': csrf_token},
+        data=data,
+        files=files
+    )
+    
+    result = response.json()
+    print(f"Imported {result['total_registros']} records")
+```
+</CodeGroup>
+
+<ParamField body="ot_id" type="integer" required>
+  The work order to associate with imported data
+</ParamField>
+
+<ParamField body="archivo_excel" type="file" required>
+  Excel file containing Anexo C data
+</ParamField>
+
+### Import MPP (MS Project)
+
+Import project schedule from Microsoft Project (.mpp file).
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.sascop-bme-subtec.com/operaciones/ot/importar-mpp/" \
+  -H "Cookie: sessionid=your_session_id" \
+  -H "X-CSRFToken: your_csrf_token" \
+  -F "ot_id=1" \
+  -F "archivo_mpp=@/path/to/cronograma.mpp" \
+  -F "nombre_version=Cronograma Inicial"
+```
+
+```python Python
+with open('cronograma.mpp', 'rb') as f:
+    files = {'archivo_mpp': f}
+    data = {
+        'ot_id': 1,
+        'nombre_version': 'Cronograma Inicial'
+    }
+    
+    response = session.post(
+        'https://api.sascop-bme-subtec.com/operaciones/ot/importar-mpp/',
+        headers={'X-CSRFToken': csrf_token},
+        data=data,
+        files=files
+    )
+```
+</CodeGroup>
+
+<ParamField body="ot_id" type="integer" required>
+  The work order identifier
+</ParamField>
+
+<ParamField body="archivo_mpp" type="file" required>
+  Microsoft Project file (.mpp)
+</ParamField>
+
+<ParamField body="nombre_version" type="string" required>
+  Version name for the imported schedule
+</ParamField>
+
+## OTE Model Structure
+
+From `operaciones/models/ote_models.py:5-93`:
+
+```python
+class OTE(models.Model): 
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE)
+    id_pte_header = models.ForeignKey(PTEHeader, on_delete=models.CASCADE, null=True, blank=True)
+    orden_trabajo = models.CharField(max_length=100)
+    descripcion_trabajo = models.TextField()
+    id_responsable_proyecto = models.ForeignKey(ResponsableProyecto, on_delete=models.CASCADE)
+    responsable_cliente = models.CharField(max_length=200)
+    oficio_ot = models.CharField(max_length=100)
+    id_estatus_ot = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    fecha_inicio_programado = models.DateField(blank=True, null=True)
+    fecha_inicio_real = models.DateField(blank=True, null=True)
+    fecha_termino_programado = models.DateField(blank=True, null=True)
+    fecha_termino_real = models.DateField(blank=True, null=True)
+    estatus = models.IntegerField(default=1)
+    num_reprogramacion = models.IntegerField(null=True, blank=True)
+    ot_principal = models.IntegerField(null=True, blank=True)
+    monto_mxn = models.DecimalField(decimal_places=2, max_digits=25, null=True, blank=True, default=0)
+    monto_usd = models.DecimalField(decimal_places=2, max_digits=25, null=True, blank=True, default=0)
+    id_frente = models.ForeignKey(Frente, on_delete=models.SET_NULL, null=True, blank=True)
+    id_embarcacion = models.IntegerField(null=True, blank=True)
+    id_plataforma = models.IntegerField(null=True, blank=True)
+    id_intercom = models.IntegerField(null=True, blank=True)
+    id_patio = models.IntegerField(null=True, blank=True)
+    plazo_dias = models.IntegerField(null=True, blank=True)
+    
+    requiere_patio = models.BooleanField(default=False)
+    fecha_inicio_patio = models.DateField(blank=True, null=True)
+    fecha_fin_patio = models.DateField(blank=True, null=True)
+```
+
+## OT Details Model
+
+Tracks individual steps within a work order:
+
+```python
+class OTDetalle(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, related_name='detalles')
+    estatus_paso = models.ForeignKey(Estatus, on_delete=models.CASCADE)
+    id_paso = models.ForeignKey(PasoOt, on_delete=models.CASCADE)
+    fecha_entrega = models.DateField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    comentario = models.TextField(blank=True, null=True)
+    archivo = models.TextField(blank=True, null=True)
+```
+
+## Related Models
+
+<CardGroup cols={2}>
+  <Card title="Anexo Import" icon="file-excel" href="/api/models/ote#importacionanexo">
+    Excel import tracking for production items
+  </Card>
+  
+  <Card title="Partida Anexo" icon="list" href="/api/models/ote#partidaanexoimportada">
+    Individual line items from Anexo C
+  </Card>
+  
+  <Card title="MPP Import" icon="project-diagram" href="/api/models/production#cronogramaversion">
+    MS Project schedule versions
+  </Card>
+  
+  <Card title="OT Steps" icon="tasks" href="/api/models/ote#pasoot">
+    Work order step definitions
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<Warning>
+  **Reprogramming OTs** must maintain a reference to their parent OT via the `ot_principal` field.
+  The `id_tipo` must be set to 5 (Reprogramación) to distinguish from initial OTs (tipo 4).
+</Warning>
+
+<Tip>
+  Use the `con_sitios()` class method to efficiently load OTEs with their associated sites:
+  ```python
+  ots = OTE.con_sitios(estatus=1, id_frente=2)
+  for ot in ots:
+      print(ot.embarcacion_obj.descripcion)
+  ```
+</Tip>
+
+## Related Documentation
+
+- [OTE Models](/api/models/ote) - Complete data model reference
+- [Production API](/api/production) - Production tracking endpoints
+- [Catalogs API](/api/catalogs) - Site and front management

@@ -1,0 +1,479 @@
+---
+title: Work Order Reprogramming
+description: Complete guide to creating and managing reprogrammed work orders (Type 5)
+---
+
+## Overview
+
+Work Order Reprogramming allows you to create new schedule versions of existing work orders while maintaining the link to the original order. Reprogrammed orders (Type 5) inherit key properties from their parent Initial Orders (Type 4) but allow updated schedules, resources, and budgets.
+
+<Info>
+  Reprogrammed orders maintain a link to the original work order through the `ot_principal` field and are sequentially numbered via `num_reprogramacion`.
+</Info>
+
+## Reprogramming Model Properties
+
+The OTE model includes specific fields for managing reprogramming:
+
+```python operaciones/models/ote_models.py
+class OTE(models.Model):
+    # ... other fields ...
+    num_reprogramacion = models.IntegerField(null=True, blank=True)
+    ot_principal = models.IntegerField(null=True, blank=True)
+```
+
+<ParamField path="ot_principal" type="integer">
+  ID of the original work order (only set for Type 5 reprogrammed orders)
+</ParamField>
+
+<ParamField path="num_reprogramacion" type="integer">
+  Sequential reprogramming number (1st reprogram, 2nd reprogram, etc.)
+</ParamField>
+
+## Reprogramming Detection Properties
+
+Two computed properties help track reprogramming relationships:
+
+```python operaciones/models/ote_models.py
+@property
+def tiene_reprogramaciones(self):
+    """Retorna True si esta OT tiene reprogramaciones asociadas"""
+    if self.id_tipo_id != 4:  # Solo para OTs iniciales
+        return False
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).exists()
+
+@property
+def count_reprogramaciones(self):
+    """Retorna el número de reprogramaciones asociadas"""
+    if self.id_tipo_id != 4:
+        return 0
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).count()
+```
+
+<CardGroup cols={2}>
+  <Card title="tiene_reprogramaciones" icon="circle-check">
+    Boolean check if initial order has active reprogrammed versions
+  </Card>
+  <Card title="count_reprogramaciones" icon="hashtag">
+    Count of active reprogrammed orders linked to this initial order
+  </Card>
+</CardGroup>
+
+<Note>
+  These properties only return meaningful data for Initial Orders (Type 4). They filter for active status (`-1` or `1`) to exclude logically deleted records.
+</Note>
+
+## Creating Reprogrammed Orders
+
+The creation process requires linking to an existing Initial Order:
+
+```python operaciones/views/ote.py
+if str(ot.id_tipo_id) == '5':
+    ot_principal_id = request.POST.get('ot_principal')
+    num_reprogramacion = request.POST.get('num_reprogramacion')
+
+    if not ot_principal_id:
+        return JsonResponse({
+            'exito': False, 
+            'tipo_aviso': 'advertencia', 
+            'detalles': 'Para una reprogramación, debe seleccionar la OT Inicial.'
+        })
+    
+    ot.ot_principal = ot_principal_id
+    ot.num_reprogramacion = num_reprogramacion
+else:
+    ot.ot_principal = None
+    ot.num_reprogramacion = None
+```
+
+<Steps>
+  <Step title="Validate Principal Order">
+    Ensure an Initial Order (Type 4) is selected as the parent
+  </Step>
+  <Step title="Set Reprogramming Fields">
+    Link to parent via `ot_principal` and set sequential number
+  </Step>
+  <Step title="Save Work Order">
+    Persist with Type 5 designation
+  </Step>
+</Steps>
+
+<Warning>
+  Reprogrammed orders **must** have a valid `ot_principal` reference. The system will reject creation if this is missing.
+</Warning>
+
+## Retrieving Initial Orders
+
+To populate the Initial Order selector when creating reprogrammed orders:
+
+```python operaciones/views/ote.py
+@require_http_methods(["GET"])
+def obtener_ots_principales(request):
+    """Obtener todas las OTs para el selector de OT principal"""
+    try:
+        ot_id = request.GET.get('ot_id')
+
+        ots = OTE.objects.filter(
+            id_tipo=4, 
+        ).exclude(
+            estatus=0,
+        ).values('id', 'orden_trabajo', 'descripcion_trabajo', 'oficio_ot').order_by('-id')
+        
+        data = list(ots)
+        return JsonResponse(data, safe=False)
+    except Exception as e:
+        return JsonResponse([], safe=False)
+```
+
+### Response Format
+
+```json
+[
+  {
+    "id": 123,
+    "orden_trabajo": "OT-2024-001",
+    "descripcion_trabajo": "Pipeline inspection and repair",
+    "oficio_ot": "BME-OT-001-2024"
+  },
+  {
+    "id": 122,
+    "orden_trabajo": "OT-2024-002",
+    "descripcion_trabajo": "Platform structural assessment",
+    "oficio_ot": "BME-OT-002-2024"
+  }
+]
+```
+
+<Info>
+  Only active Initial Orders (`id_tipo=4`, `estatus!=0`) are returned, ordered by ID descending to show most recent first.
+</Info>
+
+## Automatic Step Configuration
+
+Reprogrammed orders use different step templates than initial orders:
+
+```python operaciones/views/ote.py
+if ot.id_tipo_id == 5:
+    tipo_paso_busqueda = 5 if ot.id_cliente_id == 1 else 18 if ot.id_cliente_id in [2, 3, 4] else 5
+else:
+    tipo_paso_busqueda = 5
+
+pasos_a_crear = PasoOt.objects.filter(tipo=tipo_paso_busqueda, activo=True).order_by('id')
+
+if pasos_a_crear:
+    detalles_a_crear = []
+    for paso in pasos_a_crear:
+        detalles_a_crear.append(OTDetalle(
+            id_ot_id=ot.id,
+            estatus_paso_id=1, 
+            id_paso_id=paso.id,
+            comentario=""
+        ))
+    
+    OTDetalle.objects.bulk_create(detalles_a_crear)
+```
+
+<AccordionGroup>
+  <Accordion title="Type 5 with Client 1">
+    Uses step template type `5`
+  </Accordion>
+  <Accordion title="Type 5 with Clients 2, 3, 4">
+    Uses step template type `18` (alternate client workflow)
+  </Accordion>
+  <Accordion title="Type 4 (Initial Orders)">
+    Uses step template type `5` (standard workflow)
+  </Accordion>
+</AccordionGroup>
+
+## Reprogramming Number Management
+
+During editing, the system validates and manages reprogramming numbers:
+
+```python operaciones/views/ote.py
+num_reprogramacion = request.POST.get('num_reprogramacion')
+if num_reprogramacion and num_reprogramacion.strip(): 
+    try:
+        ot.num_reprogramacion = int(num_reprogramacion)
+    except (ValueError, TypeError):
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': 'El número de reprogramación debe ser un número válido'
+        })
+else:
+    ot.num_reprogramacion = None
+```
+
+<Warning>
+  The reprogramming number must be a valid integer. Empty strings are converted to `None` to maintain database integrity.
+</Warning>
+
+## DataTable Reprogramming Display
+
+The DataTable includes reprogramming status for each work order:
+
+```python operaciones/views/ote.py
+data.append({
+    'id': ot.id,
+    'orden_trabajo': ot.orden_trabajo,
+    'ot_principal': ot.ot_principal,
+    'num_reprogramacion': ot.num_reprogramacion,
+    'tiene_reprogramaciones': ot.tiene_reprogramaciones,
+    'count_reprogramaciones': ot.count_reprogramaciones,
+    # ... other fields ...
+})
+```
+
+<ResponseField name="ot_principal" type="integer">
+  ID of parent Initial Order (null for Type 4 orders)
+</ResponseField>
+
+<ResponseField name="num_reprogramacion" type="integer">
+  Sequential reprogramming number
+</ResponseField>
+
+<ResponseField name="tiene_reprogramaciones" type="boolean">
+  Whether this Initial Order has reprogrammed versions
+</ResponseField>
+
+<ResponseField name="count_reprogramaciones" type="integer">
+  Count of active reprogrammed orders
+</ResponseField>
+
+## Historical Import Script
+
+The system includes a comprehensive import script for historical work orders with reprogramming:
+
+```python importar_ot.py
+def procesar_reprogramacion(fila, contador):
+    """
+    Procesa una reprogramación (tipo 5)
+    """
+    try:
+        tipo_ot_id = 5  # Siempre 5 para reprogramaciones
+        
+        try:
+            tipo_ot = Tipo.objects.get(id=5)
+        except Tipo.DoesNotExist:
+            tipo_ot = Tipo.objects.filter(
+                nivel_afectacion=2,
+                descripcion__icontains="REPROGRAMACION"
+            ).first()
+        
+        # Buscar OT principal
+        ot_principal = None
+        ot_principal_id = None
+        
+        if not pd.isna(fila['ot_principal']) and fila['ot_principal']:
+            orden_trabajo_principal = str(fila['ot_principal']).strip()
+            ot_principal = obtener_ot_principal_por_orden_trabajo(
+                orden_trabajo_principal, 
+                tipo_ot_id
+            )
+            
+            if ot_principal:
+                ot_principal_id = ot_principal.id
+                pte_principal = ot_principal.id_pte_header
+            else:
+                return False, f"No se encontró OT principal: {orden_trabajo_principal}"
+        
+        if not ot_principal:
+            return False, "Reprogramación sin OT principal especificada"
+```
+
+### Import Script Key Features
+
+<Steps>
+  <Step title="Validate Reprogramming Type">
+    Ensures Type 5 designation for reprogrammed orders
+  </Step>
+  <Step title="Locate Parent Order">
+    Searches for Initial Order by `orden_trabajo` field
+  </Step>
+  <Step title="Inherit PTE Reference">
+    Copies PTE link from parent to maintain document hierarchy
+  </Step>
+  <Step title="Sequential Processing">
+    Processes Initial Orders first, then Reprogrammed Orders to ensure parent existence
+  </Step>
+</Steps>
+
+### Parent Order Resolution
+
+```python importar_ot.py
+def obtener_ot_principal_por_orden_trabajo(orden_trabajo_principal, tipo_ot_actual):
+    """
+    Busca OT principal (tipo 4) por orden_trabajo para las reprogramadas (tipo 5)
+    """
+    if tipo_ot_actual != 5:
+        return None
+    
+    try:
+        ot_principal = OTE.objects.filter(
+            orden_trabajo=orden_trabajo_principal,
+            id_tipo_id=4  # Solo OTs iniciales
+        ).first()
+        
+        if ot_principal:
+            print(f"✓ OT principal encontrada: {orden_trabajo_principal} (ID: {ot_principal.id})")
+            return ot_principal
+        else:
+            print(f"⚠ OT principal NO encontrada para reprogramación: {orden_trabajo_principal}")
+            return None
+    except Exception as e:
+        print(f"✗ Error buscando OT principal: {e}")
+        return None
+```
+
+<Note>
+  The import script validates that parent orders are Type 4 and exist before creating reprogrammed orders. This prevents orphaned reprogramming records.
+</Note>
+
+## PTE Inheritance
+
+Reprogrammed orders inherit the PTE reference from their parent:
+
+```python importar_ot.py
+if ot_principal:
+    ot_principal_id = ot_principal.id
+    pte_principal = ot_principal.id_pte_header
+    print(f"✓ Usando PTE de OT principal: {pte_principal.oficio_pte}")
+
+# Later in the code...
+ot.id_pte_header = pte_principal  # Usar PTE de la OT principal
+ot.ot_principal = ot_principal_id
+```
+
+<Info>
+  This ensures the entire family of work orders (initial + all reprogrammed versions) remain linked to the same planning document (PTE).
+</Info>
+
+## Automatic Sequential Numbering
+
+If no reprogramming number is provided, the system can auto-assign:
+
+```python importar_ot.py
+if not pd.isna(fila['num_reprogramacion']):
+    try:
+        ot.num_reprogramacion = int(fila['num_reprogramacion'])
+    except (ValueError, TypeError):
+        if ot_principal_id:
+            reprogramaciones = OTE.objects.filter(
+                ot_principal=ot_principal_id,
+                id_tipo_id=5
+            ).count()
+            ot.num_reprogramacion = reprogramaciones + 1
+        else:
+            ot.num_reprogramacion = 1
+```
+
+<Steps>
+  <Step title="Try Explicit Number">
+    Use provided `num_reprogramacion` if valid
+  </Step>
+  <Step title="Count Existing Reprograms">
+    Query for existing reprogrammed orders linked to parent
+  </Step>
+  <Step title="Assign Next Sequential">
+    Set number to `count + 1` for automatic sequencing
+  </Step>
+</Steps>
+
+## Filtering by Initial Order
+
+The DataTable supports filtering reprogrammed orders by their parent:
+
+```python operaciones/views/ote.py
+tipo_id = request.GET.get('tipo', '4') 
+ot_principal_id = request.GET.get('ot_principal', None)
+
+filters = {'estatus__in': [-1, 1]}
+
+if tipo_id:
+    filters['id_tipo_id'] = tipo_id
+    
+if ot_principal_id:
+    filters['ot_principal'] = ot_principal_id
+
+ots = OTE.objects.filter(**filters)
+```
+
+<ParamField query="tipo" type="string">
+  Filter by work order type: `"4"` for initial, `"5"` for reprogrammed
+</ParamField>
+
+<ParamField query="ot_principal" type="integer">
+  Filter to show only reprogrammed orders of a specific initial order
+</ParamField>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Link to Valid Parent">
+    Verify the Initial Order exists and is active before creating reprogrammed orders. The system will reject orphaned reprogramming attempts.
+  </Accordion>
+
+  <Accordion title="Use Sequential Numbering">
+    Maintain sequential reprogramming numbers (1, 2, 3...) for clear version tracking. The system can auto-generate these if needed.
+  </Accordion>
+
+  <Accordion title="Preserve Original Context">
+    Reprogrammed orders inherit the PTE reference automatically. Don't override this unless you have a specific business reason.
+  </Accordion>
+
+  <Accordion title="Update Schedules Explicitly">
+    While basic info is inherited, always update schedule dates (`fecha_inicio_programado`, `fecha_termino_programado`) to reflect the new plan.
+  </Accordion>
+
+  <Accordion title="Document Reprogramming Reasons">
+    Use the `comentario` field to explain why reprogramming was necessary. This provides valuable audit trail information.
+  </Accordion>
+</AccordionGroup>
+
+## Common Reprogramming Scenarios
+
+<CardGroup cols={2}>
+  <Card title="Weather Delays" icon="cloud-bolt">
+    Create reprogrammed order with extended dates when offshore work is delayed by weather
+  </Card>
+  <Card title="Resource Changes" icon="people-group">
+    Reprogram when different vessels, crews, or equipment become necessary
+  </Card>
+  <Card title="Scope Modifications" icon="list-check">
+    Create new version when work scope changes require schedule adjustment
+  </Card>
+  <Card title="Client Requests" icon="handshake">
+    Reprogram to accommodate client-requested timeline changes
+  </Card>
+</CardGroup>
+
+## URL Endpoints
+
+```python operaciones/urls.py
+path('ot/crear-ot-reprogramacion/', ote.crear_ot, name='crear_ot'),
+path('ot/obtener_ot_iniciales/', ote.obtener_ots_principales, name='obtener_ots_principales'),
+```
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Work Order Overview" icon="clipboard-list" href="/features/ote/overview">
+    Understand the complete OTE model structure
+  </Card>
+  <Card title="Scheduling" icon="calendar" href="/features/ote/scheduling">
+    Learn about timeline and progress tracking
+  </Card>
+  <Card title="Import Historical Data" icon="database" href="/features/ote/import-annexes">
+    Bulk import work orders with reprogramming relationships
+  </Card>
+</CardGroup>

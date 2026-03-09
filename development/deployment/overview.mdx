@@ -1,0 +1,498 @@
+---
+title: Deployment Overview
+description: Complete guide to deploying SASCOP BME SubTec to production environments
+---
+
+## Overview
+
+SASCOP BME SubTec is a Django application designed to be deployed on multiple platforms including AWS, Vercel, and traditional WSGI servers. This guide covers deployment strategies, requirements, and best practices.
+
+## Deployment Options
+
+The application supports several deployment methods:
+
+<CardGroup cols={2}>
+  <Card title="WSGI Server" icon="server">
+    Deploy using Gunicorn behind Nginx or Apache
+    - Traditional deployment
+    - Full control over infrastructure
+    - Recommended for AWS EC2, DigitalOcean, etc.
+  </Card>
+  
+  <Card title="Vercel" icon="triangle">
+    Serverless deployment on Vercel
+    - Zero configuration
+    - Automatic scaling
+    - Built-in CI/CD
+  </Card>
+  
+  <Card title="Docker" icon="docker">
+    Containerized deployment
+    - Consistent environments
+    - Easy scaling
+    - Works with Kubernetes, ECS, etc.
+  </Card>
+  
+  <Card title="Platform as a Service" icon="cloud">
+    Deploy to Heroku, Railway, or Render
+    - Managed infrastructure
+    - Simple deployment process
+    - Automatic backups
+  </Card>
+</CardGroup>
+
+## WSGI Application
+
+The application provides a WSGI entry point in `bme_subtec/wsgi.py:1-8`:
+
+```python bme_subtec/wsgi.py
+import os
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'bme_subtec.settings')
+
+application = get_wsgi_application()
+
+app = application
+```
+
+<Note>
+The `app` variable is used by some platforms like Vercel that expect this naming convention.
+</Note>
+
+## Production Server
+
+The application uses **Gunicorn** as its WSGI HTTP server:
+
+```bash requirements.txt
+gunicorn==21.2.0
+```
+
+### Running with Gunicorn
+
+<Steps>
+  <Step title="Basic Command">
+    ```bash
+    gunicorn bme_subtec.wsgi:application
+    ```
+  </Step>
+
+  <Step title="Production Configuration">
+    ```bash
+    gunicorn bme_subtec.wsgi:application \
+      --bind 0.0.0.0:8000 \
+      --workers 4 \
+      --timeout 120 \
+      --access-logfile - \
+      --error-logfile -
+    ```
+  </Step>
+
+  <Step title="Using Gunicorn Config File">
+    Create `gunicorn_config.py`:
+    
+    ```python gunicorn_config.py
+    import multiprocessing
+
+    # Server socket
+    bind = "0.0.0.0:8000"
+    backlog = 2048
+
+    # Worker processes
+    workers = multiprocessing.cpu_count() * 2 + 1
+    worker_class = "sync"
+    worker_connections = 1000
+    timeout = 120
+    keepalive = 2
+
+    # Logging
+    accesslog = "-"
+    errorlog = "-"
+    loglevel = "info"
+
+    # Process naming
+    proc_name = "sascop_bme_subtec"
+
+    # Server mechanics
+    daemon = False
+    pidfile = None
+    user = None
+    group = None
+    tmp_upload_dir = None
+    ```
+    
+    Run with config:
+    ```bash
+    gunicorn -c gunicorn_config.py bme_subtec.wsgi:application
+    ```
+  </Step>
+</Steps>
+
+## Static Files
+
+The application uses **WhiteNoise** for serving static files in production:
+
+```python bme_subtec/settings.py
+MIDDLEWARE = [
+    'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Must be after SecurityMiddleware
+    # ...
+]
+
+STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_DIRS = [BASE_DIR / 'operaciones' / 'static',]
+```
+
+### Collecting Static Files
+
+Before deployment, collect all static files:
+
+```bash
+python manage.py collectstatic --noinput
+```
+
+<Note>
+WhiteNoise serves static files directly from the Django app, eliminating the need for Nginx or Apache to serve static content.
+</Note>
+
+### Optional: Enable Compression
+
+For better performance, enable WhiteNoise compression:
+
+```python bme_subtec/settings.py
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+```
+
+## Database Considerations
+
+### Production Database
+
+The application uses PostgreSQL with SSL in production:
+
+```python bme_subtec/settings.py
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+        'USER': os.environ.get('RDS_USERNAME', 'postgres'),
+        'PASSWORD': os.environ.get('RDS_PASSWORD', ''),
+        'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+        'PORT': os.environ.get('RDS_PORT', '5432'),
+        'OPTIONS': {
+            'sslmode': 'require',
+        }
+    }
+}
+```
+
+### Database Migrations
+
+Run migrations on production database:
+
+```bash
+python manage.py migrate --noinput
+```
+
+See [Database Migrations](/development/deployment/database-migrations) for detailed information.
+
+## Environment Variables
+
+Critical environment variables for production:
+
+```bash .env.production
+# Django Core
+SECRET_KEY=your-production-secret-key-here
+DEBUG=False
+ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com
+
+# Database
+RDS_DB_NAME=production_db
+RDS_USERNAME=db_user
+RDS_PASSWORD=secure_password
+RDS_HOSTNAME=db.example.com
+RDS_PORT=5432
+
+# Email
+EMAIL_HOST=smtp.sendgrid.net
+EMAIL_PORT=587
+EMAIL_HOST_USER=apikey
+EMAIL_HOST_PASSWORD=your-sendgrid-api-key
+DEFAULT_FROM_EMAIL=SASCOP <noreply@yourdomain.com>
+```
+
+<Warning>
+**Critical Security Settings:**
+- Set `DEBUG=False` in production
+- Use a strong, unique `SECRET_KEY`
+- Configure `ALLOWED_HOSTS` properly
+- Never commit `.env` files to version control
+</Warning>
+
+See [Environment Variables](/development/deployment/environment-variables) for complete reference.
+
+## Security Checklist
+
+<Steps>
+  <Step title="DEBUG Mode">
+    Ensure `DEBUG=False` in production:
+    ```python
+    DEBUG = os.getenv('DEBUG', 'True') == 'True'
+    ```
+    Set environment variable: `DEBUG=False`
+  </Step>
+
+  <Step title="Secret Key">
+    Generate a strong secret key:
+    ```bash
+    python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'
+    ```
+    
+    Set in environment:
+    ```bash
+    SECRET_KEY=your-generated-key-here
+    ```
+  </Step>
+
+  <Step title="Allowed Hosts">
+    Configure allowed hosts:
+    ```python bme_subtec/settings.py
+    ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '').split(',')
+    ```
+    
+    Set environment:
+    ```bash
+    ALLOWED_HOSTS=yourdomain.com,www.yourdomain.com
+    ```
+  </Step>
+
+  <Step title="HTTPS Configuration">
+    Enable HTTPS security settings:
+    ```python bme_subtec/settings.py
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    ```
+  </Step>
+
+  <Step title="Database SSL">
+    Ensure SSL is enabled for database connections:
+    ```python
+    'OPTIONS': {
+        'sslmode': 'require',
+    }
+    ```
+  </Step>
+</Steps>
+
+## Deployment Workflow
+
+<Steps>
+  <Step title="Prepare Code">
+    ```bash
+    git checkout main
+    git pull origin main
+    ```
+  </Step>
+
+  <Step title="Install Dependencies">
+    ```bash
+    pip install -r requirements.txt
+    ```
+  </Step>
+
+  <Step title="Set Environment Variables">
+    Configure all required environment variables in your deployment platform.
+  </Step>
+
+  <Step title="Collect Static Files">
+    ```bash
+    python manage.py collectstatic --noinput
+    ```
+  </Step>
+
+  <Step title="Run Migrations">
+    ```bash
+    python manage.py migrate --noinput
+    ```
+  </Step>
+
+  <Step title="Create Superuser (First Time Only)">
+    ```bash
+    python manage.py createsuperuser --noinput \
+      --username admin \
+      --email admin@yourdomain.com
+    ```
+  </Step>
+
+  <Step title="Start Application">
+    ```bash
+    gunicorn bme_subtec.wsgi:application --bind 0.0.0.0:8000 --workers 4
+    ```
+  </Step>
+</Steps>
+
+## Build Script
+
+The application includes a `build_files.sh` script for deployment automation:
+
+```bash build_files.sh
+#!/bin/bash
+# Currently empty - add your build commands here
+
+# Example build steps:
+# pip install -r requirements.txt
+# python manage.py collectstatic --noinput
+# python manage.py migrate --noinput
+```
+
+Make it executable:
+
+```bash
+chmod +x build_files.sh
+```
+
+## Monitoring and Logging
+
+### Application Logging
+
+Configure Django logging for production:
+
+```python bme_subtec/settings.py
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': '/var/log/sascop/django.log',
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+```
+
+### Health Check Endpoint
+
+Create a health check endpoint for monitoring:
+
+```python core/views.py
+from django.http import JsonResponse
+from django.db import connection
+
+def health_check(request):
+    try:
+        # Check database connection
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+        
+        return JsonResponse({
+            'status': 'healthy',
+            'database': 'connected'
+        })
+    except Exception as e:
+        return JsonResponse({
+            'status': 'unhealthy',
+            'error': str(e)
+        }, status=500)
+```
+
+## Performance Optimization
+
+### Database Connection Pooling
+
+For high-traffic applications, consider using pgBouncer or django-db-connection-pool.
+
+### Caching
+
+Implement Redis caching:
+
+```python bme_subtec/settings.py
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
+    }
+}
+```
+
+### Gunicorn Workers
+
+Calculate optimal worker count:
+
+```python
+workers = (2 * multiprocessing.cpu_count()) + 1
+```
+
+## Rollback Strategy
+
+<Steps>
+  <Step title="Database Backup">
+    Always backup database before deployment:
+    ```bash
+    pg_dump -h $RDS_HOSTNAME -U $RDS_USERNAME $RDS_DB_NAME > backup_$(date +%Y%m%d_%H%M%S).sql
+    ```
+  </Step>
+
+  <Step title="Git Tag Release">
+    Tag releases for easy rollback:
+    ```bash
+    git tag -a v1.0.0 -m "Release version 1.0.0"
+    git push origin v1.0.0
+    ```
+  </Step>
+
+  <Step title="Rollback Commands">
+    If issues occur:
+    ```bash
+    # Rollback code
+    git checkout v1.0.0
+    
+    # Rollback migrations
+    python manage.py migrate app_name migration_name
+    
+    # Restore database (if needed)
+    psql -h $RDS_HOSTNAME -U $RDS_USERNAME $RDS_DB_NAME < backup.sql
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="key" href="/development/deployment/environment-variables">
+    Complete reference for all environment variables
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/development/deployment/database-migrations">
+    Learn about managing migrations in production
+  </Card>
+  
+  <Card title="Static Files" icon="file" href="/development/deployment/static-files">
+    Configure static file serving
+  </Card>
+</CardGroup>

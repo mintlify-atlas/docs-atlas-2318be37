@@ -1,0 +1,393 @@
+---
+title: 'Clients & Project Responsibles'
+description: 'Manage client organizations and project leadership assignments'
+icon: 'users'
+---
+
+## Overview
+
+This catalog manages two critical entities:
+- **Clients (Clientes)**: Organizations receiving services
+- **Project Responsibles (Responsables de Proyecto)**: Project leaders and managers
+
+## Data Models
+
+### Cliente (Client)
+
+```python operaciones/models/catalogos_models.py
+class Cliente(models.Model):
+    descripcion = models.CharField(max_length=100)
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, blank=True, null=True)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'cliente'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+### ResponsableProyecto (Project Responsible)
+
+```python operaciones/models/catalogos_models.py
+class ResponsableProyecto(models.Model):
+    descripcion = models.CharField(max_length=50)
+    activo = models.BooleanField(default=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'responsable_proyecto'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+### Contrato (Contract)
+
+Contracts link clients to specific work agreements:
+
+```python operaciones/models/catalogos_models.py
+class Contrato(models.Model):
+    numero_contrato = models.CharField(max_length=100, unique=True, verbose_name="No. Contrato", null=True, blank=True)
+    descripcion = models.TextField(null=True, blank=True)
+    cliente = models.ForeignKey(Cliente, on_delete=models.PROTECT, null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    monto_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0, null=True, blank=True)
+    monto_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'contrato'
+
+    def __str__(self):
+        return f"{self.numero_contrato} - {self.descripcion}"
+```
+
+<Info>
+  Contracts use `PROTECT` on the client foreign key to prevent accidental deletion of clients with active contracts.
+</Info>
+
+## Client Management
+
+Clients are managed through a standard CRUD interface following catalog patterns.
+
+### URL Configuration
+
+```python operaciones/urls.py
+# URLs for Clients
+path('catalogos/cliente/', catalogos.lista_cliente, name='lista_cliente'),
+path('catalogos/datatable_cliente/', catalogos.datatable_cliente, name='datatable_cliente'),
+path('catalogos/cliente/crear/', catalogos.crear_cliente, name='crear_cliente'),
+path('catalogos/cliente/eliminar/', catalogos.eliminar_cliente, name='eliminar_cliente'),
+path('catalogos/cliente/obtener/', catalogos.obtener_cliente, name='obtener_cliente'),
+path('catalogos/cliente/editar/', catalogos.editar_cliente, name='editar_cliente'),
+```
+
+### Integration with PTEs
+
+Clients are referenced in PTE (Propuesta Técnico-Económica) creation:
+
+```python operaciones/views/pte.py (reference)
+def obtener_clientes(request):
+    """Get all active clients for PTE assignment"""
+    try:
+        clientes = Cliente.objects.filter(activo=True)
+        # Returns client list for dropdown selection
+        ...
+```
+
+## Project Responsible Management
+
+### Listing Project Responsibles
+
+Project responsibles are used throughout the system to track project leadership.
+
+### URL Configuration
+
+```python operaciones/urls.py
+# URLs for Project Responsibles
+path('catalogos/responsable/', catalogos.lista_responsable, name='lista_responsable'),
+path('catalogos/datatable_responsable/', catalogos.datatable_responsable, name='datatable_responsable'),
+path('catalogos/responsable/crear/', catalogos.crear_responsable, name='crear_responsable'),
+path('catalogos/responsable/eliminar/', catalogos.eliminar_responsable, name='eliminar_responsable'),
+path('catalogos/responsable/obtener/', catalogos.obtener_responsable, name='obtener_responsable'),
+path('catalogos/responsable/editar/', catalogos.editar_responsable, name='editar_responsable'),
+```
+
+### Integration with PTEs
+
+Responsibles are assigned to PTEs and work orders:
+
+```python operaciones/views/pte.py (reference)
+def obtener_responsables_proyecto(request):
+    """Get all active project responsibles"""
+    try:
+        responsables = ResponsableProyecto.objects.filter(activo=True)
+        # Returns list for assignment dropdown
+        ...
+```
+
+## Query Center Integration
+
+Both clients and responsibles are used extensively in Query Center filters and dashboards:
+
+### Client Filter Query
+
+```python operaciones/views/centro_consulta.py (excerpt)
+SELECT
+    pd.id AS id_origen,
+    'PTE' AS tipo,
+    COALESCE(ph.oficio_pte, 'SIN FOLIO') AS folio,
+    COALESCE(c.descripcion, 'CLIENTE NO ASIGNADO') AS cliente,
+    COALESCE(rp.descripcion, 'SIN LÍDER') AS lider,
+    ...
+FROM
+    pte_detalle pd
+INNER JOIN pte_header ph ON
+    pd.id_pte_header_id = ph.id
+LEFT JOIN cliente c ON
+    ph.id_cliente_id = c.id
+LEFT JOIN responsable_proyecto rp ON
+    ph.id_responsable_proyecto_id = rp.id
+```
+
+### Dynamic WHERE Clause Construction
+
+```python operaciones/views/centro_consulta.py
+def fn_construir_where_dinamico(filtros):
+    """
+    Construye dinámicamente la cláusula WHERE y su diccionario de parámetros
+    """
+    lista_lideres    = filtros.get("lideres_id", [])
+    lista_clientes   = filtros.get("clientes_id", [])
+    
+    condiciones = []
+    params = {}
+    
+    if lista_lideres:
+        condiciones.append("T._fid_lider::text IN %(ids_lideres)s")
+        params["ids_lideres"] = tuple(lista_lideres)
+    
+    if lista_clientes:
+        condiciones.append("T._fid_cliente::text IN %(ids_clientes)s")
+        params["ids_clientes"] = tuple(lista_clientes)
+    
+    # ... additional filter construction
+    
+    return clausula_where, params
+```
+
+<Tip>
+  **Filter Performance**: Client and responsible filters use indexed foreign key lookups for optimal query performance.
+</Tip>
+
+## Dashboard Aggregations
+
+Query Center dashboards aggregate data by client and project leader:
+
+```python operaciones/views/centro_consulta.py
+def fn_agrupar_datos_dashboard(registros_db, modo_sitio_libre=False):
+    lideres = {}
+    clientes = {}
+    
+    for fila in registros_db:
+        lider = fila.get("lider", "SIN LÍDER")
+        cliente = fila.get("cliente", "SIN CLIENTE")
+        
+        es_cargado = fila.get("tiene_archivo", 0) == 1
+        es_no_aplica = (fila.get("estatus_paso_id") == 14)
+        
+        # Initialize aggregation dictionaries
+        if lider not in lideres:
+            lideres[lider] = {"cargados": 0, "pendientes": 0, "no_aplica": 0}
+        
+        if cliente not in clientes:
+            clientes[cliente] = {"cargados": 0, "pendientes": 0, "no_aplica": 0}
+        
+        # Aggregate by status
+        if es_no_aplica:
+            lideres[lider]["no_aplica"] += 1
+            clientes[cliente]["no_aplica"] += 1
+        elif es_cargado:
+            lideres[lider]["cargados"] += 1
+            clientes[cliente]["cargados"] += 1
+        else:
+            lideres[lider]["pendientes"] += 1
+            clientes[cliente]["pendientes"] += 1
+    
+    datos_procesados = {
+        "rendimiento_lideres": [
+            {
+                "nombre": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in lideres.items()
+        ],
+        "estatus_clientes": [
+            {
+                "cliente": llave, 
+                "cargados": valor["cargados"], 
+                "pendientes": valor["pendientes"], 
+                "no_aplica": valor["no_aplica"]
+            } 
+            for llave, valor in clientes.items()
+        ],
+        # ... other dashboard metrics
+    }
+    
+    return datos_procesados
+```
+
+## Contract Structure
+
+### Contract Annexes
+
+```python operaciones/models/catalogos_models.py
+class AnexoContrato(models.Model):
+    TIPO_ANEXO = [
+        ('TECNICO', 'Anexo Técnico (Especificaciones)'),
+        ('FINANCIERO', 'Anexo C (Lista de Precios)'),
+        ('LEGAL', 'Legal/Administrativo'),
+    ]
+    
+    contrato = models.ForeignKey(Contrato, on_delete=models.CASCADE, related_name='anexos_maestros')
+    clave = models.CharField(max_length=100, null=True, blank=True)
+    descripcion = models.CharField(max_length=100, null=True, blank=True)
+    tipo = models.CharField(max_length=20, choices=TIPO_ANEXO, default='FINANCIERO')
+    archivo = models.FileField(upload_to='contratos/anexos_maestros/', null=True, blank=True)
+    monto_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0, null=True, blank=True)
+    monto_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'contrato_anexo_maestro'
+
+    def __str__(self):
+        return f"{self.descripcion} ({self.contrato.numero_contrato})"
+```
+
+### Sub-Annexes
+
+```python operaciones/models/catalogos_models.py
+class SubAnexo(models.Model):
+    anexo_maestro = models.ForeignKey(AnexoContrato, on_delete=models.CASCADE, related_name='sub_anexos')
+    clave_anexo = models.CharField(max_length=50)
+    descripcion = models.TextField()
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE, null=True, blank=True)
+    cantidad = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    precio_unitario_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    precio_unitario_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    importe_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    importe_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    activo = models.BooleanField(default=True)
+    
+    class Meta:
+        db_table = 'contrato_sub_anexo'
+        ordering = ['clave_anexo']
+        unique_together = ['anexo_maestro', 'clave_anexo']
+
+    def __str__(self):
+        return f"{self.clave_anexo} - {self.descripcion[:50]}..."
+```
+
+<AccordionGroup>
+  <Accordion title="Contract Hierarchy" icon="sitemap">
+    - **Contrato**: Top-level contract with client
+    - **AnexoContrato**: Major contract sections (Technical, Financial, Legal)
+    - **SubAnexo**: Detailed line items within each annex
+    - **ConceptoMaestro**: Work concepts referencing sub-annexes
+  </Accordion>
+</AccordionGroup>
+
+## Excel Export Integration
+
+Client and responsible data appears in Query Center exports:
+
+```python operaciones/views/centro_consulta.py
+sql_excel = f"""
+    SELECT
+        T.tipo AS "Origen",
+        T.folio AS "Folio",
+        T.cliente AS "Cliente",
+        T.lider AS "Líder",
+        T.frente AS "Frente",
+        T.sitio AS "Sitio",
+        T.documento AS "Documento",
+        T._descripcion_estatus AS "Estatus",
+        ...
+    FROM (
+        {subconsulta_dinamica}
+    ) AS T
+    {clausula_where}
+    ORDER BY T._fecha_sort ASC NULLS LAST;
+"""
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Unique Client Names">
+    Ensure client descriptions are unique and descriptive:
+    ```python
+    if Cliente.objects.filter(
+        descripcion__iexact=descripcion, 
+        activo=True
+    ).exists():
+        return JsonResponse({
+            'exito': False,
+            'detalles': 'Cliente con este nombre ya existe'
+        })
+    ```
+  </Step>
+  
+  <Step title="Responsible Assignment">
+    Always assign a project responsible to PTEs and OTs for proper tracking:
+    ```python
+    if not id_responsable_proyecto:
+        return JsonResponse({
+            'exito': False,
+            'detalles': 'Responsable de proyecto es obligatorio'
+        })
+    ```
+  </Step>
+  
+  <Step title="Contract Validation">
+    Validate contract dates and amounts:
+    ```python
+    if fecha_termino < fecha_inicio:
+        return JsonResponse({
+            'exito': False,
+            'detalles': 'Fecha de término debe ser posterior al inicio'
+        })
+    ```
+  </Step>
+  
+  <Step title="Soft Delete Policy">
+    Never hard-delete clients with existing contracts or PTEs. Use `activo=False`.
+  </Step>
+</Steps>
+
+<Warning>
+  **Data Integrity**: Clients and responsibles are heavily referenced throughout the system. Always check for dependencies before deactivation.
+</Warning>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Catalogs Overview" icon="database" href="/features/catalogs/overview">
+    Return to catalog management overview
+  </Card>
+  <Card title="Query Center Dashboards" icon="chart-line" href="/features/centro-consulta/dashboards">
+    See client and leader analytics
+  </Card>
+  <Card title="Contracts Management" icon="file-contract" href="/features/catalogs/products">
+    Learn about contract structures
+  </Card>
+  <Card title="Global Search" icon="magnifying-glass" href="/features/centro-consulta/global-search">
+    Filter by clients and responsibles
+  </Card>
+</CardGroup>

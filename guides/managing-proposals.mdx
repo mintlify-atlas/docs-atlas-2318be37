@@ -1,0 +1,509 @@
+---
+title: 'Managing Proposals (PTEs)'
+description: 'Create, track, and manage Technical-Economic Proposals in SASCOP BME SubTec'
+icon: 'file-lines'
+---
+
+## Overview
+
+PTEs (Propuestas Técnico-Económicas) are technical-economic proposals that represent the planning phase of projects. This guide covers the complete PTE lifecycle.
+
+## Understanding PTEs
+
+<Card title="What is a PTE?" icon="lightbulb">
+  A PTE is a comprehensive proposal document that includes:
+  - Project description and scope
+  - Technical requirements
+  - Timeline and milestones
+  - Resource allocation
+  - Cost estimates
+  - Client information
+</Card>
+
+### PTE Workflow Stages
+
+<Steps>
+  <Step title="Creation">
+    Initial proposal is created with basic information
+  </Step>
+  
+  <Step title="Planning">
+    Steps are defined and assigned
+  </Step>
+  
+  <Step title="In Process">
+    Work progresses through defined steps
+  </Step>
+  
+  <Step title="Completion">
+    All steps are finished and deliverables submitted
+  </Step>
+  
+  <Step title="Work Order Creation">
+    Approved PTEs can generate work orders (OTEs)
+  </Step>
+</Steps>
+
+## Creating a New PTE
+
+### Step-by-Step Guide
+
+<Steps>
+  <Step title="Navigate to PTE Module">
+    Go to **Operaciones > PTEs > Nuevo**
+  </Step>
+  
+  <Step title="Fill Basic Information">
+    Enter required fields:
+    
+    <CardGroup cols={2}>
+      <Card title="Oficio PTE" icon="file">
+        Official document number (e.g., PTE-2026-001)
+      </Card>
+      
+      <Card title="Oficio Solicitud" icon="envelope">
+        Request document number
+      </Card>
+      
+      <Card title="Cliente" icon="building">
+        Select client organization
+      </Card>
+      
+      <Card title="Tipo" icon="tag">
+        PTE type/category
+      </Card>
+    </CardGroup>
+  </Step>
+  
+  <Step title="Set Deadlines">
+    Configure timeline:
+    - **Fecha Solicitud**: Request date
+    - **Plazo Días**: Duration in days
+    - **Prioridad**: Priority level (1-5)
+  </Step>
+  
+  <Step title="Assign Responsibility">
+    Select **Responsable del Proyecto** from the dropdown
+  </Step>
+  
+  <Step title="Submit">
+    Click **Guardar** to create the PTE
+  </Step>
+</Steps>
+
+### Backend Implementation
+
+```python operaciones/views/pte.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def crear_pte(request):
+    # Extract form data
+    oficio_pte = request.POST.get('oficio_pte', 'SIN FOLIO')
+    descripcion_trabajo = request.POST.get('descripcion_trabajo','POR DEFINIR')
+    id_cliente = request.POST.get('id_cliente')
+    responsable_proyecto = request.POST.get('responsable_proyecto')
+    plazo_dias = int(request.POST.get('plazo_dias', 0))
+    
+    # Validate required fields
+    if not id_cliente:
+        return JsonResponse({
+            'exito': False,
+            'detalles': 'El cliente es obligatorio'
+        })
+    
+    # Create PTE header
+    pte_header = PTEHeader.objects.create(
+        oficio_pte=oficio_pte,
+        descripcion_trabajo=descripcion_trabajo,
+        id_responsable_proyecto_id=responsable_proyecto,
+        plazo_dias=plazo_dias,
+        id_cliente_id=id_cliente,
+        estatus=1  # PENDIENTE
+    )
+    
+    # Auto-create steps based on client type
+    clientes = Cliente.objects.get(id=id_cliente)
+    tipo_cliente = clientes.id_tipo_id
+    pasos = Paso.objects.filter(activo=1, id_tipo_cliente_id=tipo_cliente)
+    
+    for paso in pasos:
+        PTEDetalle.objects.create(
+            id_pte_header_id=pte_header.id,
+            id_paso_id=paso.id,
+            estatus_paso_id=1,  # PENDIENTE
+            comentario=''
+        )
+```
+
+<Note>
+  Steps are automatically created based on the client type when a PTE is created.
+</Note>
+
+## PTE Status Management
+
+### Status Types
+
+| Status | Code | Description | Color |
+|--------|------|-------------|-------|
+| PENDIENTE | 1 | Awaiting start | Yellow |
+| PROCESO | 2 | Work in progress | Blue |
+| ENTREGADA | 3 | Completed and delivered | Green |
+| CANCELADA | 4 | Cancelled | Red |
+| SUSPENDIDA | 9 | Temporarily suspended | Gray |
+
+### Changing PTE Status
+
+<Steps>
+  <Step title="Open PTE Details">
+    Click on a PTE in the list to view details
+  </Step>
+  
+  <Step title="Click Status Button">
+    Click the "Cambiar Estatus" button
+  </Step>
+  
+  <Step title="Select New Status">
+    Choose the new status from the dropdown
+  </Step>
+  
+  <Step title="Add Comments (Optional)">
+    Provide explanation for status change
+  </Step>
+  
+  <Step title="Set Delivery Date">
+    For ENTREGADA status, set the delivery date
+  </Step>
+  
+  <Step title="Save Changes">
+    Click **Guardar** to apply the status change
+  </Step>
+</Steps>
+
+```python operaciones/views/pte.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_pte(request):
+    pte_id = request.POST.get('pte_id')
+    nuevo_estatus = request.POST.get('nuevo_estatus')
+    fecha_entrega = request.POST.get('fecha_entrega', None)
+    
+    pte = PTEHeader.objects.get(id=pte_id)
+    pte.estatus = nuevo_estatus
+    
+    # Set delivery date when marking as completed
+    if int(nuevo_estatus) == 3:
+        if fecha_entrega:
+            pte.fecha_entrega = fecha_entrega
+        else:
+            pte.fecha_entrega = timezone.now()
+    
+    pte.save()
+```
+
+## Managing PTE Steps
+
+### Viewing Steps
+
+Each PTE has multiple steps that must be completed:
+
+<Card title="PTE Steps DataTable" icon="list-check">
+  The steps table shows:
+  - Step order and description
+  - Current status
+  - Start and end dates
+  - Responsible person
+  - Progress percentage
+  - File attachments
+</Card>
+
+### Updating Step Status
+
+<Steps>
+  <Step title="Access Step Actions">
+    Click the action button next to a step
+  </Step>
+  
+  <Step title="Change Status">
+    Select from:
+    - **PENDIENTE**: Not started
+    - **PROCESO**: In progress
+    - **COMPLETADO**: Finished
+    - **NO APLICA**: Not applicable
+  </Step>
+  
+  <Step title="Set Dates">
+    Update:
+    - Fecha Inicio
+    - Fecha Término
+    - Fecha Entrega
+  </Step>
+  
+  <Step title="Add Notes">
+    Enter comments about progress or issues
+  </Step>
+  
+  <Step title="Upload Files">
+    Attach deliverables or evidence
+  </Step>
+</Steps>
+
+```python operaciones/views/pte.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_paso(request):
+    paso_id = request.POST.get('paso_id')
+    nuevo_estatus = request.POST.get('nuevo_estatus')
+    comentario = request.POST.get('comentario','')
+    
+    detalle = PTEDetalle.objects.get(id=paso_id)
+    detalle.estatus_paso_id = int(nuevo_estatus)
+    detalle.comentario = comentario
+    
+    # Auto-set completion date
+    if int(nuevo_estatus) == 3:
+        detalle.fecha_entrega = timezone.now()
+    
+    detalle.save()
+    
+    # Check if all steps completed
+    verificar_y_actualizar_paso_4(detalle.id_pte_header_id)
+```
+
+### Progress Calculation
+
+<Card title="PTE Progress Formula" icon="percent">
+  ```python
+  detalles = PTEDetalle.objects.filter(id_pte_header_id=pte.id)
+  total_pasos = detalles.count()
+  pasos_completados = detalles.filter(estatus_paso__in=[3,14]).count()
+  
+  progreso = (pasos_completados / total_pasos) * 100
+  ```
+  
+  **Note**: Status 3 = COMPLETADO, Status 14 = NO APLICA
+</Card>
+
+## Special Step: Volumetría (Step 4)
+
+Step 4 often contains substeps that must all be completed:
+
+<AccordionGroup>
+  <Accordion title="View Substeps" icon="diagram-nested">
+    Click on Step 4 to expand substeps (tipo=2)
+  </Accordion>
+  
+  <Accordion title="Complete Substeps" icon="check">
+    Mark each substep as completed individually
+  </Accordion>
+  
+  <Accordion title="Auto-Complete Parent" icon="magic">
+    When all substeps are done, Step 4 is automatically marked complete:
+    
+    ```python operaciones/views/pte.py
+    def verificar_y_actualizar_paso_4(pte_header_id):
+        subpasos = PTEDetalle.objects.filter(
+            id_pte_header_id=pte_header_id,
+            id_paso__tipo=2
+        )
+        
+        total_subpasos = subpasos.count()
+        subpasos_completados = subpasos.filter(estatus_paso__in=[3, 14]).count()
+        
+        if subpasos_completados == total_subpasos:
+            paso_4.estatus_paso_id = 3
+            paso_4.comentario = "Entregables finalizados"
+            paso_4.save()
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Editing PTEs
+
+<Warning>
+  Only users with `operaciones.change_pteheader` permission can edit PTEs.
+</Warning>
+
+<Steps>
+  <Step title="Open Edit Form">
+    Click **Editar** button on PTE details page
+  </Step>
+  
+  <Step title="Modify Fields">
+    Update any editable fields (status cannot be changed here)
+  </Step>
+  
+  <Step title="Save Changes">
+    Click **Guardar** to apply changes
+    
+    ```python operaciones/views/pte.py
+    @require_http_methods(["POST"])
+    @login_required
+    @registrar_actividad
+    def editar_pte(request):
+        pte_id = request.POST.get('id')
+        pte = get_object_or_404(PTEHeader, id=pte_id)
+        
+        pte.oficio_pte = request.POST.get('oficio_pte', pte.oficio_pte)
+        pte.descripcion_trabajo = request.POST.get('descripcion_trabajo')
+        pte.plazo_dias = float(request.POST.get('plazo_dias'))
+        
+        pte.save()
+    ```
+  </Step>
+</Steps>
+
+## Searching and Filtering PTEs
+
+### Quick Search
+
+Use the search box to find PTEs by:
+- Oficio PTE
+- Description
+- Responsible person
+
+### Advanced Filters
+
+<CardGroup cols={2}>
+  <Card title="By Status" icon="filter">
+    Filter by PENDIENTE, PROCESO, ENTREGADA, etc.
+  </Card>
+  
+  <Card title="By Type" icon="tag">
+    Filter by PTE type/category
+  </Card>
+  
+  <Card title="By Year" icon="calendar">
+    Filter PTEs by year (extracted from oficio_pte)
+  </Card>
+  
+  <Card title="By Client" icon="building">
+    Filter by client organization
+  </Card>
+  
+  <Card title="By Responsible" icon="user">
+    Filter by project manager
+  </Card>
+</CardGroup>
+
+## Creating Work Orders from PTEs
+
+Once a PTE reaches 100% completion:
+
+<Steps>
+  <Step title="Verify 100% Complete">
+    Ensure all steps are marked COMPLETADO or NO APLICA
+  </Step>
+  
+  <Step title="Click 'Create OT'">
+    Button appears when PTE is 100% complete
+  </Step>
+  
+  <Step title="Enter OT Information">
+    Provide:
+    - Oficio OT (work order number)
+    - Tipo OT (work order type)
+    - Additional details
+  </Step>
+  
+  <Step title="Submit">
+    System creates work order and links it to PTE
+    
+    ```python operaciones/views/pte.py
+    @registrar_actividad
+    def crear_ot_desde_pte(request):
+        pte_id = request.POST.get('pte_id')
+        oficio_ot = request.POST.get('oficio')
+        
+        pte = PTEHeader.objects.get(id=pte_id)
+        
+        # Verify 100% complete
+        detalles = PTEDetalle.objects.filter(id_pte_header_id=pte.id)
+        pasos_completados = detalles.filter(estatus_paso_id__in=[3, 4, 14]).count()
+        progreso = (pasos_completados / detalles.count()) * 100
+        
+        if progreso < 100:
+            return JsonResponse({
+                'exito': False,
+                'detalles': 'PTE must be 100% complete'
+            })
+        
+        # Create work order
+        ote = OTE.objects.create(
+            id_pte_header=pte,
+            orden_trabajo=oficio_ot,
+            descripcion_trabajo=pte.descripcion_trabajo,
+            # Copy relevant fields from PTE
+        )
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Some PTE steps (like volumetry) are automatically copied to the new work order.
+</Note>
+
+## Deleting PTEs
+
+<Warning>
+  Deletion requires `operaciones.delete_pteheader` permission and is logical (not physical).
+</Warning>
+
+```python operaciones/views/pte.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def eliminar_pte(request):
+    if not request.user.has_perm('operaciones.delete_pteheader'):
+        return JsonResponse({
+            'detalles': 'No tienes permiso para eliminar PTEs',
+            'exito': False
+        })
+    
+    pte_id = request.POST.get('id')
+    pte = PTEHeader.objects.get(id=pte_id)
+    pte.estatus = 0  # Logical deletion
+    pte.save()
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Clear Descriptions" icon="message">
+    Write detailed work descriptions for better tracking
+  </Card>
+  
+  <Card title="Realistic Deadlines" icon="clock">
+    Set achievable timelines based on actual capacity
+  </Card>
+  
+  <Card title="Regular Updates" icon="rotate">
+    Update step status frequently to reflect progress
+  </Card>
+  
+  <Card title="Document Everything" icon="file">
+    Attach all deliverables and evidence to steps
+  </Card>
+  
+  <Card title="Use Comments" icon="comment">
+    Add notes explaining decisions or issues
+  </Card>
+  
+  <Card title="Review Before Complete" icon="check-double">
+    Verify all information before marking as ENTREGADA
+  </Card>
+</CardGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Executing Work Orders" icon="list-check" href="/guides/executing-work-orders">
+    Learn how to manage work orders created from PTEs
+  </Card>
+  
+  <Card title="Activity Logs" icon="clock-rotate-left" href="/guides/admin/activity-logs">
+    View PTE modification history
+  </Card>
+</CardGroup>

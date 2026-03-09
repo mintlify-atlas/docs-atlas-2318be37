@@ -1,0 +1,413 @@
+---
+title: "Workflow Steps Management"
+description: "Detailed guide to managing PTE workflow steps, including status updates, progress tracking, and substep handling"
+icon: "list-check"
+---
+
+## Overview
+
+Each PTE contains multiple workflow steps (`PTEDetalle` records) that track the progress of specific tasks. These steps have their own statuses, dates, and can include substeps for complex processes.
+
+## Step Status Lifecycle
+
+Workflow steps use the following status values:
+
+<CardGroup cols={2}>
+  <Card title="1 - PENDIENTE" icon="clock">
+    Step has not been started yet
+  </Card>
+  
+  <Card title="2 - PROCESO" icon="spinner">
+    Work is actively being performed
+  </Card>
+  
+  <Card title="3 - COMPLETADO" icon="check">
+    Step has been successfully completed
+  </Card>
+  
+  <Card title="14 - NO APLICA" icon="ban">
+    Step is not applicable for this PTE
+  </Card>
+  
+  <Card title="4 - CANCELADO" icon="xmark">
+    Step has been cancelled
+  </Card>
+  
+  <Card title="15 - SUSPENDIDA" icon="pause">
+    Step has been temporarily suspended
+  </Card>
+</CardGroup>
+
+## Retrieving Step Details
+
+The `datatable_pte_detalle` function provides detailed step information for a specific PTE:
+
+**URL:** `/pte/detalle/datatable/`  
+**Method:** `GET`  
+**Parameters:** `pte_header_id`
+
+```python
+def datatable_pte_detalle(request):
+    """Datatable para detalle de PTE"""
+    pte_header_id = request.GET.get('pte_header_id')
+    
+    detalles = PTEDetalle.objects.filter(
+        id_pte_header_id=pte_header_id, 
+        id_paso__tipo=1  # Main steps only
+    ).select_related('id_paso','id_pte_header').annotate(
+        estatus_pte_texto=Case(
+            When(estatus_paso=1, then=Value('PENDIENTE')),
+            When(estatus_paso=2, then=Value('PROCESO')),
+            When(estatus_paso=3, then=Value('COMPLETADO')),
+            When(estatus_paso=4, then=Value('CANCELADO')),
+            When(estatus_paso=14, then=Value('NO APLICA')),
+            When(estatus_paso=15, then=Value('SUSPENDIDA')),
+            default=Value('DESCONOCIDO'),
+            output_field=CharField()
+        )
+    ).order_by('id')
+```
+
+<Note>
+The query uses `select_related` for performance optimization, reducing database queries by prefetching related `Paso` and `PTEHeader` objects.
+</Note>
+
+## Substeps (Tipo=2)
+
+Some steps, particularly **Step 4 (Volumetría)**, contain substeps for tracking detailed deliverables:
+
+```python
+for detalle in detalles:
+    if detalle.id_paso_id == 4:  # Volumetría step
+        subpasos = PTEDetalle.objects.filter(
+            id_pte_header_id=pte_header_id,
+            id_paso__tipo=2  # Substeps
+        )
+        total_subpasos = subpasos.count()
+        subpasos_completados = subpasos.filter(estatus_paso__in=[3,14]).count()
+        
+        if total_subpasos > 0:
+            detalle.progreso_subpasos = (subpasos_completados / total_subpasos) * 100
+        else:
+            detalle.progreso_subpasos = 0
+```
+
+<Info>
+Substeps are identified by `id_paso.tipo=2`, while main steps have `tipo=1`. This allows hierarchical tracking of complex workflows.
+</Info>
+
+## Updating Step Status
+
+The `cambiar_estatus_paso` function handles step status updates:
+
+**URL:** `/pte/cambiar_estatus_paso/`  
+**Method:** `POST`  
+**Authentication:** Required  
+**Activity Logging:** Enabled
+
+### Parameters
+
+<ParamField path="paso_id" type="integer" required>
+  ID of the PTEDetalle record to update
+</ParamField>
+
+<ParamField path="nuevo_estatus" type="integer" required>
+  New status value (1-15)
+</ParamField>
+
+<ParamField path="comentario" type="string">
+  Optional comment about the status change
+</ParamField>
+
+<ParamField path="fecha_entrega" type="date">
+  Delivery date (automatically set to now if status=3 and not provided)
+</ParamField>
+
+### Implementation
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_paso(request):
+    """Cambiar estatus de un paso del PTE"""
+    try:
+        paso_id = request.POST.get('paso_id')
+        nuevo_estatus = request.POST.get('nuevo_estatus')
+        comentario = request.POST.get('comentario','')
+        fecha_entrega = request.POST.get('fecha_entrega','')
+        
+        if not paso_id or not nuevo_estatus:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'advertencia',
+                'detalles': 'Datos incompletos'
+            })
+        
+        detalle = PTEDetalle.objects.get(id=paso_id)
+        pte_header_id = detalle.id_pte_header_id
+        
+        estatus_anterior = detalle.estatus_paso_id
+        
+        # Update status and comment
+        detalle.estatus_paso_id = int(nuevo_estatus)
+        if comentario:
+            detalle.comentario = comentario
+        else:
+            detalle.comentario = None
+
+        # Auto-set delivery date when completing
+        if int(nuevo_estatus) == 3:
+            if fecha_entrega:
+                detalle.fecha_entrega = fecha_entrega
+            else:
+                detalle.fecha_entrega = timezone.now()        
+        elif estatus_anterior == 3 and int(nuevo_estatus) != 3:
+            detalle.fecha_entrega = None
+            
+        detalle.save()
+        
+        # Check if this updates Step 4 automatically
+        paso_actualizado_4 = verificar_y_actualizar_paso_4(pte_header_id)
+        
+        # Recalculate overall progress
+        detalles_pte = PTEDetalle.objects.filter(id_pte_header_id=detalle.id_pte_header_id)
+        total_pasos = detalles_pte.count()
+        pasos_completados = detalles_pte.filter(estatus_paso=3).count()
+        
+        progreso = 0
+        if total_pasos > 0:
+            progreso = (pasos_completados / total_pasos) * 100
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Estatus actualizado correctamente',
+            'progreso': round(progreso),
+            'pasos_completados': pasos_completados,
+            'total_pasos': total_pasos,
+            'paso_actualizado_4': paso_actualizado_4
+        })
+```
+
+<Warning>
+When changing a step's status FROM "Completado" (3) to any other status, the `fecha_entrega` is automatically cleared to maintain data integrity.
+</Warning>
+
+## Automatic Step 4 Completion
+
+Step 4 (Volumetría de Materiales) is **automatically completed** when all of its substeps are done:
+
+```python
+def verificar_y_actualizar_paso_4(pte_header_id):
+    """Verificar si todos los subpasos del paso 4 están completados y actualizarlo automáticamente"""
+    try:
+        paso_4 = PTEDetalle.objects.filter(
+            id_pte_header_id=pte_header_id,
+            id_paso_id=4  # Volumetría step
+        ).first()
+        
+        if not paso_4:
+            return False
+        
+        subpasos = PTEDetalle.objects.filter(
+            id_pte_header_id=pte_header_id,
+            id_paso__tipo=2  # Substeps
+        )
+        
+        total_subpasos = subpasos.count()
+        
+        if total_subpasos == 0:
+            return False
+        
+        subpasos_completados = subpasos.filter(estatus_paso__in=[3, 14]).count()
+        
+        # Auto-complete if all substeps are done
+        if subpasos_completados == total_subpasos and paso_4.estatus_paso_id != 3:
+            paso_4.estatus_paso_id = 3
+            paso_4.comentario = "Entregables finalizados"
+            paso_4.fecha_termino = timezone.now().date()
+            paso_4.save()
+            return True  # Indicates paso 4 was auto-updated
+        
+        return False
+```
+
+<Tip>
+This automation ensures that parent steps accurately reflect the completion of all their child substeps without manual intervention.
+</Tip>
+
+## Date Management
+
+Each step tracks three important dates:
+
+### Date Fields
+
+| Field | Purpose | When Set |
+|-------|---------|----------|
+| `fecha_inicio` | Start date | When work begins |
+| `fecha_termino` | Completion date | When work finishes |
+| `fecha_entrega` | Delivery date | Auto-set when status=3 |
+
+### Updating Dates
+
+**URL:** `/pte/actualizar-fecha/`  
+**Method:** `POST`
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def actualizar_fecha(request):
+    """Actualizar fecha de inicio de un paso"""
+    try:
+        id_paso = request.POST.get('id_paso')
+        fecha = request.POST.get('fecha')
+        tipo = request.POST.get('tipo')  # 1=inicio, 2=termino, 3=entrega
+        
+        paso_detalle = PTEDetalle.objects.get(id=id_paso)
+        
+        if tipo == '1':
+            paso_detalle.fecha_inicio = fecha if fecha else None
+        elif tipo == '2':
+            paso_detalle.fecha_termino = fecha if fecha else None
+        elif tipo == '3':
+            paso_detalle.fecha_entrega = fecha if fecha else None
+            
+        paso_detalle.save()
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Fecha actualizada correctamente',
+            'fecha_actualizada': fecha
+        })
+```
+
+## File Attachments
+
+Steps can have associated files/URLs stored in the `archivo` field:
+
+**URL:** `/pte/guardar_archivo_pte/`  
+**Method:** `POST`
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def guardar_archivo_pte(request):
+    """Guardar Archivo de entregables de pte"""
+    try:
+        paso_id = request.POST.get('paso_id')
+        url = request.POST.get('archivo')
+        
+        paso = PTEDetalle.objects.get(id=paso_id)
+        paso.archivo = url
+        paso.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'URL asignada correctamente',
+            'exito': True
+        })
+```
+
+<Note>
+The `archivo` field stores text (typically URLs or file paths) rather than binary file data, allowing flexibility in how files are stored and accessed.
+</Note>
+
+## Progress Tracking
+
+There are two progress tracking endpoints:
+
+### Overall PTE Progress
+
+**URL:** `/pte/obtener-progreso-general-pte/`
+
+```python
+def obtener_progreso_general_pte(request):
+    pte_id = request.GET.get('pte_id')
+    
+    detalles = PTEDetalle.objects.filter(id_pte_header_id=pte_id)
+    total_pasos = detalles.count()
+    pasos_completados = detalles.filter(estatus_paso__in=[3, 14]).count()
+    
+    progreso = 0
+    if total_pasos > 0:
+        progreso = (pasos_completados / total_pasos) * 100
+    
+    return JsonResponse({
+        'exito': True,
+        'progreso': round(progreso),
+        'pasos_completados': pasos_completados,
+        'total_pasos': total_pasos
+    })
+```
+
+### Step 4 (Volumetría) Progress
+
+**URL:** `/pte/obtener-progreso-paso4/`
+
+```python
+def obtener_progreso_paso4(request):
+    pte_header_id = request.GET.get('pte_header_id')
+    
+    subpasos = PTEDetalle.objects.filter(
+        id_pte_header_id=pte_header_id,
+        id_paso__tipo=2  # Substeps
+    )
+    
+    total_subpasos = subpasos.count()
+    subpasos_completados = subpasos.filter(estatus_paso__in=[3, 14]).count()
+    
+    progreso = 0
+    if total_subpasos > 0:
+        progreso = (subpasos_completados / total_subpasos) * 100
+    
+    return JsonResponse({
+        'exito': True,
+        'progreso': round(progreso),
+        'subpasos_completados': subpasos_completados,
+        'total_subpasos': total_subpasos
+    })
+```
+
+## DataTable Response Format
+
+```json
+{
+  "draw": 1,
+  "recordsTotal": 15,
+  "recordsFiltered": 15,
+  "data": [
+    {
+      "id": 123,
+      "orden": "1",
+      "desc_paso": "Recepción de Solicitud",
+      "tipo_paso": 1,
+      "estatus_pte": 3,
+      "estatus_pte_texto": "COMPLETADO",
+      "fecha_entrega": "15/01/2024",
+      "fecha_inicio": "2024-01-10",
+      "fecha_termino": "2024-01-15",
+      "comentario": "Recibido correctamente",
+      "es_subpaso": false,
+      "progreso_subpasos": null,
+      "folio_pte": "PTE-2024-001",
+      "archivo": "https://example.com/doc.pdf"
+    }
+  ]
+}
+```
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Status Tracking" icon="signal" href="/features/pte/status-tracking">
+    Learn about overall PTE status management
+  </Card>
+  
+  <Card title="Creating PTEs" icon="plus" href="/features/pte/creating-pte">
+    Understand how workflow steps are initialized
+  </Card>
+</CardGroup>

@@ -1,0 +1,334 @@
+---
+title: 'Dashboard Navigation'
+description: 'Navigate the SASCOP BME SubTec dashboard and access key features'
+icon: 'compass'
+---
+
+## Overview
+
+The SASCOP BME SubTec dashboard is your central hub for managing projects, work orders, production tracking, and reporting. This guide will help you navigate the interface efficiently.
+
+## Accessing the Dashboard
+
+After successful login, you'll be automatically redirected to the main dashboard:
+
+```python core/views/dashboard.py
+@login_required
+def index(request):
+    """Dashboard principal"""
+    context = {
+        'modulo_actual': 'dashboard'
+    }
+    return render(request, 'core/dashboard.html', context)
+```
+
+<Note>
+  All dashboard pages require authentication. Unauthenticated users will be redirected to the login page.
+</Note>
+
+## Dashboard Layout
+
+The dashboard consists of several key sections:
+
+<CardGroup cols={2}>
+  <Card title="Top Navigation Bar" icon="bars">
+    Access main modules and user settings
+  </Card>
+  
+  <Card title="Sidebar Menu" icon="sidebar">
+    Quick links to frequently used features
+  </Card>
+  
+  <Card title="Main Content Area" icon="window-maximize">
+    Display data tables, forms, and reports
+  </Card>
+  
+  <Card title="Status Indicators" icon="chart-line">
+    Real-time system statistics and alerts
+  </Card>
+</CardGroup>
+
+## Main Navigation Modules
+
+### 1. PTE Management (Propuestas Técnico-Económicas)
+
+<Steps>
+  <Step title="Access PTE Module">
+    Navigate to **Operaciones > PTEs** from the main menu
+  </Step>
+  
+  <Step title="View PTE List">
+    The PTE index displays key metrics:
+    
+    ```python operaciones/views/pte.py
+    @login_required(login_url='/accounts/login/')
+    def index(request):
+        total_ptes = PTEHeader.objects.filter(estatus__in=[1,2,3,4]).count()
+        total_otes = OTE.objects.count()
+        total_produccion = Produccion.objects.count()
+        
+        ptes_activo = PTEHeader.objects.filter(estatus=1).count()
+        ptes_en_proceso = PTEHeader.objects.filter(estatus=2).count()
+        ptes_terminado = PTEHeader.objects.filter(estatus=3).count()
+        ptes_cancelado = PTEHeader.objects.filter(estatus=4).count()
+    ```
+  </Step>
+  
+  <Step title="Filter and Search">
+    Use the filters to narrow down PTEs by:
+    - Status (Pendiente, Proceso, Entregada, Cancelada)
+    - Type
+    - Responsible person
+    - Year
+    - Client
+  </Step>
+</Steps>
+
+### 2. Work Orders (OTE - Órdenes de Trabajo)
+
+<Card title="OTE Overview" icon="file-contract">
+  Work orders track the execution phase of approved proposals
+  
+  **Key Features**:
+  - Create new work orders
+  - Track progress by steps
+  - Monitor timelines and deadlines
+  - Manage reprogramming
+</Card>
+
+**Navigation Path**: `Operaciones > Órdenes de Trabajo`
+
+### 3. Production Tracking
+
+<Steps>
+  <Step title="Access Production Module">
+    Go to **Operaciones > Producción**
+  </Step>
+  
+  <Step title="Select Site and Period">
+    Choose the work site and month/year for tracking
+  </Step>
+  
+  <Step title="Record Daily Production">
+    Enter production volumes in the grid interface
+  </Step>
+</Steps>
+
+<Warning>
+  Production data is locked once daily reports are closed. Contact your supervisor to reopen locked periods.
+</Warning>
+
+### 4. Catalogs and Configuration
+
+<AccordionGroup>
+  <Accordion title="Tipos (Types)" icon="tag">
+    Manage types and classifications for:
+    - PTEs (nivel_afectacion=1)
+    - Work Orders (nivel_afectacion=2)
+    - Line Items (nivel_afectacion=3)
+    - Production (nivel_afectacion=4)
+    - Clients (nivel_afectacion=5)
+  </Accordion>
+
+  <Accordion title="Sitios (Sites)" icon="location-dot">
+    Configure work sites:
+    - Embarcaciones (Vessels)
+    - Plataformas (Platforms)
+    - Patios (Yards)
+    - Intercom sites
+  </Accordion>
+
+  <Accordion title="Unidades de Medida" icon="ruler">
+    Manage measurement units:
+    - m² (square meters)
+    - kg (kilograms)
+    - pza (pieces)
+    - And custom units
+  </Accordion>
+
+  <Accordion title="Conceptos Maestros" icon="book">
+    Master catalog of work concepts:
+    - Ordinary concepts (Anexo C)
+    - Extraordinary concepts (PUEs)
+    - Pricing and descriptions
+  </Accordion>
+</AccordionGroup>
+
+**Navigation Path**: `Catálogos > [Select Catalog]`
+
+## Search and Filter Features
+
+### DataTable Interface
+
+Most list views use DataTables for powerful data management:
+
+<CardGroup cols={3}>
+  <Card title="Search" icon="magnifying-glass">
+    Global search across all columns
+  </Card>
+  
+  <Card title="Sort" icon="arrow-down-a-z">
+    Click column headers to sort
+  </Card>
+  
+  <Card title="Pagination" icon="list-ol">
+    Navigate large datasets efficiently
+  </Card>
+</CardGroup>
+
+**Example from PTE DataTable**:
+
+```python operaciones/views/pte.py
+def datatable_ptes(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('search[value]', '')
+    
+    ptes = PTEHeader.objects.filter(estatus__gt=0)
+    
+    if search_value:
+        ptes = ptes.filter(
+            Q(descripcion_trabajo__icontains=search_value) |
+            Q(oficio_pte__icontains=search_value) |
+            Q(id_responsable_proyecto__descripcion__icontains=search_value) 
+        )
+```
+
+### Advanced Filters
+
+<Steps>
+  <Step title="Open Filter Panel">
+    Click the "Filtros" button above the data table
+  </Step>
+  
+  <Step title="Select Filter Criteria">
+    Choose from available filters (varies by module)
+  </Step>
+  
+  <Step title="Apply Filters">
+    Click "Aplicar" to update the table view
+  </Step>
+  
+  <Step title="Clear Filters">
+    Click "Limpiar" to reset all filters
+  </Step>
+</Steps>
+
+## User Menu
+
+Access your user menu in the top-right corner:
+
+<CardGroup cols={2}>
+  <Card title="Mi Perfil" icon="user">
+    View and edit your profile information
+  </Card>
+  
+  <Card title="Configuración" icon="gear">
+    Access system settings and preferences
+  </Card>
+  
+  <Card title="Ayuda" icon="circle-question">
+    Access help documentation
+  </Card>
+  
+  <Card title="Cerrar Sesión" icon="right-from-bracket">
+    Log out of the system
+  </Card>
+</CardGroup>
+
+## Keyboard Shortcuts
+
+<Note>
+  Use these keyboard shortcuts to navigate faster:
+  
+  - **Ctrl + H**: Return to dashboard
+  - **Ctrl + S**: Save current form
+  - **Esc**: Close modal dialogs
+  - **Tab**: Navigate form fields
+</Note>
+
+## Mobile Navigation
+
+<Warning>
+  SASCOP BME SubTec is optimized for desktop browsers. Mobile access may have limited functionality.
+</Warning>
+
+For mobile users:
+- Use landscape orientation for better visibility
+- Touch gestures work for most interactions
+- Some advanced features require desktop access
+
+## Status Indicators
+
+### PTE Status Colors
+
+| Status | Color | Description |
+|--------|-------|-------------|
+| PENDIENTE | Yellow | Awaiting processing |
+| PROCESO | Blue | Currently in progress |
+| ENTREGADA | Green | Completed and delivered |
+| CANCELADA | Red | Cancelled |
+| SUSPENDIDA | Gray | Temporarily suspended |
+
+### Work Order Progress
+
+Progress is calculated based on completed steps:
+
+```python operaciones/views/pte.py
+detalles = PTEDetalle.objects.filter(id_pte_header_id=pte.id)
+total_pasos = detalles.count()
+pasos_completados = detalles.filter(estatus_paso__in=[3,14]).count() 
+
+progreso = 0
+if total_pasos > 0:
+    progreso = (pasos_completados / total_pasos) * 100
+```
+
+## Quick Actions
+
+<CardGroup cols={2}>
+  <Card title="Create New PTE" icon="plus">
+    **Path**: Operaciones > PTEs > Nuevo
+    
+    Quickly create a new technical-economic proposal
+  </Card>
+  
+  <Card title="Create Work Order" icon="file-circle-plus">
+    **Path**: Operaciones > OT > Nuevo
+    
+    Generate a work order from an approved PTE
+  </Card>
+  
+  <Card title="Record Production" icon="calendar-check">
+    **Path**: Operaciones > Producción
+    
+    Enter daily production data
+  </Card>
+  
+  <Card title="View Reports" icon="chart-bar">
+    **Path**: Reportes
+    
+    Access reports and analytics
+  </Card>
+</CardGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Managing Proposals" icon="file-lines" href="/guides/managing-proposals">
+    Learn how to create and manage PTEs
+  </Card>
+  
+  <Card title="Executing Work Orders" icon="list-check" href="/guides/executing-work-orders">
+    Track and complete work orders
+  </Card>
+  
+  <Card title="Recording Production" icon="industry" href="/guides/recording-production">
+    Enter and validate production data
+  </Card>
+  
+  <Card title="Generating Reports" icon="file-pdf" href="/guides/generating-reports">
+    Create and export reports
+  </Card>
+</CardGroup>

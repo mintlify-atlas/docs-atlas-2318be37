@@ -1,0 +1,376 @@
+---
+title: Creating Work Orders
+description: Complete guide to creating and managing work orders in SASCOP BME SubTec
+---
+
+## Overview
+
+Work Orders (OTE) can be created as either initial orders or reprogrammed versions. The creation process automatically generates workflow steps and links to parent PTE documents.
+
+<Info>
+  Work orders must be linked to a parent PTE (Planning document) and require proper site, client, and responsibility assignment.
+</Info>
+
+## Creating Initial Work Orders (Type 4)
+
+Initial work orders are the primary execution documents derived from approved PTEs.
+
+### Create Endpoint
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+def crear_ot(request):
+    """Crear nueva OT"""
+    try:
+        orden_trabajo = request.POST.get('orden_trabajo')
+        if not orden_trabajo:
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'error', 
+                'detalles': 'El Folio de la OT es obligatorio'
+            })
+
+        ot = OTE()
+        ot.orden_trabajo = orden_trabajo
+        ot.oficio_ot = request.POST.get('oficio_ot')
+        ot.id_tipo_id = request.POST.get('id_tipo')
+        ot.descripcion_trabajo = request.POST.get('descripcion_trabajo')
+        ot.comentario = request.POST.get('comentario_general')
+        ot.responsable_cliente = request.POST.get('responsable_cliente')
+        ot.plazo_dias = request.POST.get('plazo_dias') or 0
+
+        ot.id_cliente_id = request.POST.get('id_cliente') or None
+        ot.id_frente_id = request.POST.get('id_frente') or None
+        ot.id_responsable_proyecto_id = request.POST.get('responsable_proyecto') or None
+        
+        ot.id_embarcacion = request.POST.get('id_embarcacion') or None
+        ot.id_plataforma = request.POST.get('id_plataforma') or None
+        ot.id_intercom = request.POST.get('id_intercom') or None
+        ot.id_patio = request.POST.get('id_patio') or None
+
+        ot.monto_mxn = request.POST.get('monto_mxn') or 0
+        ot.monto_usd = request.POST.get('monto_usd') or 0
+
+        if request.POST.get('fecha_inicio_programado'):
+            ot.fecha_inicio_programado = request.POST['fecha_inicio_programado']
+            
+        if request.POST.get('fecha_termino_programado'):
+            ot.fecha_termino_programado = request.POST['fecha_termino_programado']
+```
+
+### Required Fields
+
+<ParamField path="orden_trabajo" type="string" required>
+  Work order folio/identifier (e.g., "OT-2024-001")
+</ParamField>
+
+<ParamField path="oficio_ot" type="string" required>
+  Official document number
+</ParamField>
+
+<ParamField path="id_tipo" type="integer" required>
+  Work order type: `4` for initial, `5` for reprogrammed
+</ParamField>
+
+<ParamField path="descripcion_trabajo" type="string" required>
+  Detailed description of work to be performed
+</ParamField>
+
+<ParamField path="id_responsable_proyecto" type="integer" required>
+  Project manager responsible for execution
+</ParamField>
+
+<ParamField path="responsable_cliente" type="string" required>
+  Client representative name
+</ParamField>
+
+### Optional Fields
+
+<AccordionGroup>
+  <Accordion title="Financial Information">
+    ```python
+    ot.monto_mxn = request.POST.get('monto_mxn') or 0
+    ot.monto_usd = request.POST.get('monto_usd') or 0
+    ```
+    Budget amounts in Mexican Pesos and US Dollars
+  </Accordion>
+
+  <Accordion title="Location Assignment">
+    ```python
+    ot.id_frente_id = request.POST.get('id_frente') or None
+    ot.id_embarcacion = request.POST.get('id_embarcacion') or None
+    ot.id_plataforma = request.POST.get('id_plataforma') or None
+    ot.id_intercom = request.POST.get('id_intercom') or None
+    ot.id_patio = request.POST.get('id_patio') or None
+    ```
+    Site assignment depends on work front (land/offshore)
+  </Accordion>
+
+  <Accordion title="Schedule Dates">
+    ```python
+    if request.POST.get('fecha_inicio_programado'):
+        ot.fecha_inicio_programado = request.POST['fecha_inicio_programado']
+        
+    if request.POST.get('fecha_termino_programado'):
+        ot.fecha_termino_programado = request.POST['fecha_termino_programado']
+        
+    if request.POST.get('fecha_inicio_real'):
+        ot.fecha_inicio_real = request.POST['fecha_inicio_real']
+        
+    if request.POST.get('fecha_termino_real'):
+        ot.fecha_termino_real = request.POST['fecha_termino_real']
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Automatic Step Creation
+
+When a work order is created, execution steps are automatically generated based on the work order type:
+
+```python operaciones/views/ote.py
+if ot.id_tipo_id == 5:
+    tipo_paso_busqueda = 5 if ot.id_cliente_id == 1 else 18 if ot.id_cliente_id in [2, 3, 4] else 5
+else:
+    tipo_paso_busqueda = 5
+
+pasos_a_crear = PasoOt.objects.filter(tipo=tipo_paso_busqueda, activo=True).order_by('id')
+
+if pasos_a_crear:
+    detalles_a_crear = []
+    for paso in pasos_a_crear:
+        detalles_a_crear.append(OTDetalle(
+            id_ot_id=ot.id,
+            estatus_paso_id=1, 
+            id_paso_id=paso.id,
+            comentario=""
+        ))
+    
+    OTDetalle.objects.bulk_create(detalles_a_crear)
+```
+
+<Steps>
+  <Step title="Determine Step Type">
+    Step template type depends on work order type and client
+  </Step>
+  <Step title="Query Active Steps">
+    Retrieve all active step templates for the determined type
+  </Step>
+  <Step title="Bulk Create Details">
+    Create all step instances in a single database operation
+  </Step>
+</Steps>
+
+<Note>
+  Initial status for all steps is `1` (Pending). Steps are ordered by their `id` field.
+</Note>
+
+## Editing Work Orders
+
+Existing work orders can be updated through the edit endpoint:
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def editar_ot(request):
+    """Editar OT existente"""
+    try:
+        ot_id = request.POST.get('id')
+        if not ot_id:
+            return JsonResponse({
+                'exito': False,
+                'tipo_aviso': 'error',
+                'detalles': 'ID del OT no proporcionado'
+            })
+        
+        ot = get_object_or_404(OTE, id=ot_id)
+
+        if ot.estatus == -1:
+            ot.estatus = 1
+        ot.orden_trabajo = request.POST.get('orden_trabajo', ot.orden_trabajo)
+        ot.responsable_cliente = request.POST.get('responsable_cliente', ot.responsable_cliente)
+        ot.ot_principal = request.POST.get('ot_principal',ot.ot_principal)
+        ot.oficio_ot = request.POST.get('oficio_ot', ot.oficio_ot)
+        ot.id_tipo_id = request.POST.get('id_tipo', ot.id_tipo_id)
+        ot.comentario = request.POST.get('comentario_general')
+        ot.id_responsable_proyecto_id = request.POST.get('responsable_proyecto', ot.id_responsable_proyecto_id)
+```
+
+<Warning>
+  When editing a work order with status `-1` (Por definir), the status is automatically changed to `1` (Active).
+</Warning>
+
+## Yard Phase Management
+
+Work orders can include an optional yard phase for land-based preparation:
+
+```python operaciones/views/ote.py
+final_id_patio = None
+requiere_patio = False
+
+id_frente_input = request.POST.get('id_frente')
+ot.id_frente_id = id_frente_input
+
+if id_frente_input == 1:
+    patio_tierra = request.POST.get('id_patio')
+    if patio_tierra:
+        final_id_patio = patio_tierra
+else: 
+    check_fase = request.POST.get('check_fase_patio')
+    if check_fase == 'on':
+        patio_fase = request.POST.get('id_patio_fase')
+        if patio_fase:
+            final_id_patio = patio_fase
+            requiere_patio = True
+
+if final_id_patio:
+    ot.id_patio = final_id_patio
+    ot.requiere_patio = requiere_patio
+    ot.fecha_inicio_patio = request.POST.get('fecha_inicio_patio')
+    ot.fecha_fin_patio = request.POST.get('fecha_fin_patio')
+else:
+    ot.id_patio = None
+    ot.requiere_patio = False
+    ot.fecha_inicio_patio = None
+    ot.fecha_fin_patio = None
+```
+
+<CardGroup cols={2}>
+  <Card title="Land Front (id_frente = 1)" icon="warehouse">
+    Yard is always used as the primary work location
+  </Card>
+  <Card title="Offshore Front" icon="ship">
+    Yard is optional and requires explicit checkbox activation
+  </Card>
+</CardGroup>
+
+## Retrieving Work Order Data
+
+Fetch work order details for editing or display:
+
+```python operaciones/views/ote.py
+@require_http_methods(["GET"])
+@login_required(login_url='/accounts/login/')
+def obtener_datos_ot(request):
+    """Obtener datos de una OT para edición"""
+    try:
+        ot_id = request.GET.get('id')
+        ot = get_object_or_404(OTE, id=ot_id)
+        datos_ot = {
+            'id': ot.id,
+            'id_tipo_id': ot.id_tipo_id,
+            'id_frente': ot.id_frente_id,
+            'id_embarcacion': ot.id_embarcacion,
+            'id_plataforma': ot.id_plataforma,
+            'id_intercom': ot.id_intercom,
+            'id_cliente': ot.id_cliente_id,
+            'id_patio': ot.id_patio,
+            'descripcion_tipo':ot.id_tipo.descripcion,
+            'estatus_ot':ot.id_estatus_ot_id,
+            'responsable_proyecto': ot.id_responsable_proyecto_id if ot.id_responsable_proyecto_id else '',
+            'responsable_cliente':ot.responsable_cliente,
+            'id_pte_id': ot.id_pte_header_id if ot.id_pte_header_id else '',
+            'pte_padre': ot.id_pte_header.oficio_pte if ot.id_pte_header else '',
+            'oficio_ot': ot.oficio_ot,
+            'estatus':ot.estatus,
+            'orden_trabajo':ot.orden_trabajo,
+            'descripcion_trabajo': ot.descripcion_trabajo,
+            'fecha_inicio_programado': ot.fecha_inicio_programado.isoformat() if ot.fecha_inicio_programado else None,
+            'fecha_inicio_real': ot.fecha_inicio_real.isoformat() if ot.fecha_inicio_real else None, 
+            'fecha_termino_programado': ot.fecha_termino_programado.isoformat() if ot.fecha_termino_programado else None,
+            'fecha_termino_real': ot.fecha_termino_real.isoformat() if ot.fecha_termino_real else None,   
+            'comentario':ot.comentario,
+            'ot_principal': ot.ot_principal,
+            'num_reprogramacion': ot.num_reprogramacion,
+            'monto_mxn': ot.monto_mxn,
+            'monto_usd': ot.monto_usd,
+            'plazo_dias': ot.plazo_dias,
+            'requiere_patio': ot.requiere_patio,
+            'fecha_inicio_patio': ot.fecha_inicio_patio.isoformat() if ot.fecha_inicio_patio else None,
+            'fecha_fin_patio': ot.fecha_fin_patio.isoformat() if ot.fecha_fin_patio else None,
+        }
+        
+        return JsonResponse({
+            'exito': True,
+            'datos': datos_ot
+        })
+```
+
+## Logical Deletion
+
+Work orders use soft deletion to preserve historical data:
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def eliminar_ot(request):
+    """Eliminación lógica de OT"""
+    try:
+        ot_id = request.POST.get('id')
+
+        if not ot_id:
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'ID de la OT no proporcionado',
+                'exito': False
+            })
+
+        ot = OTE.objects.get(id=ot_id)
+        ot.estatus = 0 
+        ot.save()
+
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'OT eliminado correctamente',
+            'exito': True
+        })
+```
+
+<Warning>
+  Deletion sets `estatus = 0` but does not physically remove the record. This preserves audit trails and historical data.
+</Warning>
+
+## API Response Format
+
+All creation and modification operations return standardized JSON responses:
+
+```json
+{
+  "exito": true,
+  "tipo_aviso": "exito",
+  "detalles": "OT creada correctamente",
+  "id_nuevo": 123
+}
+```
+
+<ResponseField name="exito" type="boolean" required>
+  Indicates if the operation succeeded
+</ResponseField>
+
+<ResponseField name="tipo_aviso" type="string" required>
+  Alert type: `"exito"`, `"error"`, `"advertencia"`
+</ResponseField>
+
+<ResponseField name="detalles" type="string" required>
+  Human-readable message describing the result
+</ResponseField>
+
+<ResponseField name="id_nuevo" type="integer">
+  ID of newly created work order (create operations only)
+</ResponseField>
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="Scheduling" icon="calendar" href="/features/ote/scheduling">
+    Configure schedules and timelines
+  </Card>
+  <Card title="Reprogramming" icon="rotate" href="/features/ote/reprogramming">
+    Create reprogrammed versions
+  </Card>
+  <Card title="Import Annexes" icon="file-import" href="/features/ote/import-annexes">
+    Import budget and resource data
+  </Card>
+</CardGroup>

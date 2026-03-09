@@ -1,0 +1,499 @@
+---
+title: 'Activity Logs'
+description: 'Monitor and audit user activity in SASCOP BME SubTec'
+icon: 'clock-rotate-left'
+---
+
+## Overview
+
+Activity logs provide a complete audit trail of all system changes. This guide covers how to access, filter, and analyze activity data for compliance, troubleshooting, and monitoring.
+
+## Activity Log System
+
+### What is Logged?
+
+The system automatically tracks:
+
+<CardGroup cols={2}>
+  <Card title="CREATE Events" icon="plus">
+    New records added to the system
+  </Card>
+  
+  <Card title="UPDATE Events" icon="pen">
+    Modifications to existing records
+  </Card>
+  
+  <Card title="DELETE Events" icon="trash">
+    Record deletions (usually logical)
+  </Card>
+  
+  <Card title="Status Changes" icon="arrows-rotate">
+    Workflow status transitions
+  </Card>
+</CardGroup>
+
+### Activity Log Model
+
+```python operaciones/models/registro_actividad_models.py
+class RegistroActividad(models.Model):
+    registro_id = models.IntegerField(null=True, blank=True)
+    evento = models.TextField(null=True, blank=True)  # CREATE, UPDATE, DELETE
+    campo = models.TextField(blank=True, null=True)   # Changed field
+    valor_anterior = models.TextField(blank=True, null=True)  # Old value
+    valor_actual = models.TextField(blank=True, null=True)    # New value
+    afectacion = models.TextField(blank=True, null=True)      # Affected module
+    fecha = models.DateTimeField(blank=True, null=True)       # Timestamp
+    usuario_id = models.ForeignKey(User, on_delete=models.CASCADE)  # Who made change
+    tabla_log = models.IntegerField(blank=True, null=True)    # Module identifier
+    detalle = models.TextField(blank=True, null=True)         # Additional details
+    
+    class Meta:
+        db_table = 'registro_actividad'
+```
+
+## Accessing Activity Logs
+
+<Steps>
+  <Step title="Navigate to Logs">
+    Go to **Configuración > Registro de Actividad**
+  </Step>
+  
+  <Step title="View All Activity">
+    Default view shows all recent activity
+  </Step>
+  
+  <Step title="Use Filters">
+    Narrow down results (see Filtering section below)
+  </Step>
+</Steps>
+
+## Activity Log Interface
+
+The activity log view provides:
+
+```python operaciones/views/registro_actividad.py
+@login_required(login_url='/accounts/login/')
+def registro_actividad(request):
+    """Index de registro de actividad"""
+    return render(request, 'operaciones/registro_actividad/registro_actividad.html')
+```
+
+<Card title="Log Display Columns" icon="table">
+  - **ID**: Unique log entry identifier
+  - **Evento**: Action type (CREATE, UPDATE, DELETE)
+  - **Afectación**: Module/table affected
+  - **Detalle**: Description of what changed
+  - **Fecha**: Date and time of change
+  - **Usuario**: User who made the change
+  - **Valor Anterior**: Old value (for updates)
+  - **Valor Actual**: New value (for updates)
+</Card>
+
+## Filtering Activity Logs
+
+### By User
+
+<Steps>
+  <Step title="Load User List">
+    ```python operaciones/views/registro_actividad.py
+    @login_required(login_url='/accounts/login/')
+    def obtener_usuarios(request):
+        usuarios = User.objects.filter(is_active=True).values(
+            'id', 'username', 'first_name', 'last_name', 'email'
+        )
+        
+        # Format for display
+        usuarios_list.append({
+            'id': usuario['id'],
+            'descripcion': f"{usuario['first_name']} {usuario['last_name']} ({usuario['username']})"
+        })
+    ```
+  </Step>
+  
+  <Step title="Select User">
+    Choose from dropdown to see only that user's actions
+  </Step>
+</Steps>
+
+### By Event Type
+
+Filter by action:
+- **CREATE**: New record creation
+- **UPDATE**: Record modification
+- **DELETE**: Record deletion
+- **STATUS_CHANGE**: Workflow transitions
+
+### By Module (Afectación)
+
+Filter by system module:
+
+<CardGroup cols={3}>
+  <Card title="PTEs">
+    tabla_log = 1
+  </Card>
+  <Card title="Work Orders">
+    tabla_log = 2
+  </Card>
+  <Card title="Production">
+    tabla_log = 3
+  </Card>
+  <Card title="Catalogs">
+    tabla_log = 4
+  </Card>
+  <Card title="Users">
+    tabla_log = 5
+  </Card>
+  <Card title="Permissions">
+    tabla_log = 6
+  </Card>
+</CardGroup>
+
+### By Search Term
+
+Full-text search across:
+- Valor anterior
+- Valor actual
+- Evento
+- Afectación
+- Detalle
+- User name and email
+
+```python operaciones/views/registro_actividad.py
+search_value = request.GET.get('filtro', '')
+
+if search_value:
+    registros = registros.filter(
+        Q(valor_anterior__icontains=search_value) |
+        Q(valor_actual__icontains=search_value) |
+        Q(evento__icontains=search_value) |
+        Q(afectacion__icontains=search_value) |
+        Q(detalle__icontains=search_value) |
+        Q(fecha__icontains=search_value) |
+        Q(campo__icontains=search_value) |
+        Q(usuario_id__first_name__icontains=search_value) |
+        Q(usuario_id__last_name__icontains=search_value) |
+        Q(usuario_id__email__icontains=search_value)
+    )
+```
+
+## DataTable API
+
+Activity logs use server-side DataTables:
+
+```python operaciones/views/registro_actividad.py
+@login_required
+def datatable_registro_actividad(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    
+    # Apply filters
+    usuario_id = request.GET.get('usuario_id')
+    evento = request.GET.get('evento')
+    afectacion = request.GET.get('afectacion')
+    
+    registros = RegistroActividad.objects.select_related('usuario_id').all()
+    
+    if usuario_id:
+        registros = registros.filter(usuario_id_id=usuario_id)
+    if evento:
+        registros = registros.filter(evento=evento)
+    if afectacion:
+        registros = registros.filter(tabla_log=afectacion)
+    
+    # Sorting
+    order_column = request.GET.get('order[0][column]', '0')
+    order_dir = request.GET.get('order[0][dir]', 'desc')
+    
+    column_map = {
+        '0': 'id',
+        '1': 'evento',
+        '2': 'afectacion',
+        '3': 'detalle',
+        '4': 'fecha',
+        '5': 'usuario__first_name',
+    }
+    
+    order_field = column_map.get(order_column, 'fecha')
+    if order_dir == 'desc':
+        order_field = f'-{order_field}'
+    
+    registros = registros.order_by(order_field)
+    
+    # Pagination
+    total_records = registros.count()
+    registros_paginados = registros[start:start + length]
+```
+
+## Automatic Activity Logging
+
+The `@registrar_actividad` decorator automatically logs changes:
+
+<Card title="Decorator Usage" icon="at">
+  ```python operaciones/views/pte.py
+  @require_http_methods(["POST"])
+  @login_required
+  @registrar_actividad  # Automatically logs this action
+  def crear_pte(request):
+      # Create PTE
+      pte_header = PTEHeader.objects.create(...)
+  ```
+  
+  This decorator:
+  - Captures the action (CREATE, UPDATE, DELETE)
+  - Records changed fields
+  - Stores old and new values
+  - Associates with current user
+  - Timestamps the action
+</Card>
+
+## Common Use Cases
+
+### Audit Trail Investigation
+
+<Steps>
+  <Step title="Identify Record">
+    Note the ID of the record in question (e.g., PTE #123)
+  </Step>
+  
+  <Step title="Filter by Record ID">
+    Use search to find all changes to that record
+  </Step>
+  
+  <Step title="Review Timeline">
+    Sort by date to see chronological changes
+  </Step>
+  
+  <Step title="Identify Users">
+    See who made each modification
+  </Step>
+  
+  <Step title="Export Results">
+    Export filtered logs for documentation
+  </Step>
+</Steps>
+
+### Security Investigation
+
+<Steps>
+  <Step title="Suspicious Activity Detected">
+    User reports unusual changes
+  </Step>
+  
+  <Step title="Filter by Time Range">
+    Narrow to when issue occurred
+  </Step>
+  
+  <Step title="Filter by Module">
+    Focus on affected module
+  </Step>
+  
+  <Step title="Review User Actions">
+    Check what each user did during period
+  </Step>
+  
+  <Step title="Identify Source">
+    Determine if issue was:
+    - User error
+    - Unauthorized access
+    - System error
+  </Step>
+</Steps>
+
+### Compliance Reporting
+
+<Steps>
+  <Step title="Define Period">
+    Select reporting period (month, quarter, year)
+  </Step>
+  
+  <Step title="Export All Activity">
+    Export complete log for period
+  </Step>
+  
+  <Step title="Generate Statistics">
+    Count by:
+    - User
+    - Module
+    - Event type
+  </Step>
+  
+  <Step title="Document Findings">
+    Create compliance report with:
+    - Total activity count
+    - Active users
+    - Critical changes
+    - Access patterns
+  </Step>
+</Steps>
+
+### Troubleshooting Data Issues
+
+<Card title="When Data Looks Wrong" icon="bug">
+  **Example**: Production volumes suddenly changed
+  
+  **Investigation Steps**:
+  1. Find the production record ID
+  2. Filter logs by that record
+  3. Review all UPDATE events
+  4. Check:
+     - What changed (campo)
+     - Old value (valor_anterior)
+     - New value (valor_actual)
+     - Who changed it (usuario_id)
+     - When it changed (fecha)
+  5. Determine if change was:
+     - Intentional correction
+     - User error
+     - System issue
+  6. Take appropriate action (revert, train user, fix bug)
+</Card>
+
+## Exporting Activity Logs
+
+Export logs for offline analysis:
+
+<Steps>
+  <Step title="Apply Desired Filters">
+    Narrow down to relevant records
+  </Step>
+  
+  <Step title="Use DataTable Export">
+    Available formats:
+    - Excel (full data with formatting)
+    - CSV (for database import)
+    - PDF (for documentation)
+    - Print (hard copy)
+  </Step>
+  
+  <Step title="Verify Export">
+    Check that all required columns are included
+  </Step>
+</Steps>
+
+## Log Retention
+
+<Note>
+  Activity logs are permanent. They are never automatically deleted to maintain complete audit trail.
+</Note>
+
+### Archiving Old Logs
+
+For very old logs (if database grows too large):
+
+<Steps>
+  <Step title="Export Historical Data">
+    Export logs older than retention period (e.g., >5 years)
+  </Step>
+  
+  <Step title="Archive Securely">
+    Store export in secure, backed-up location
+  </Step>
+  
+  <Step title="Document Archive">
+    Record where archived data is stored
+  </Step>
+  
+  <Step title="Optional: Database Cleanup">
+    Consult with IT before deleting any log data
+  </Step>
+</Steps>
+
+## Understanding Log Entries
+
+### CREATE Event
+
+```json
+{
+  "evento": "CREATE",
+  "registro_id": 456,
+  "afectacion": "PTE",
+  "detalle": "Created PTE: PTE-2026-123",
+  "usuario": "juan.perez",
+  "fecha": "2026-03-09 14:30:00"
+}
+```
+
+### UPDATE Event
+
+```json
+{
+  "evento": "UPDATE",
+  "registro_id": 456,
+  "campo": "estatus",
+  "valor_anterior": "1 (PENDIENTE)",
+  "valor_actual": "2 (EN PROCESO)",
+  "afectacion": "PTE",
+  "detalle": "Status changed for PTE-2026-123",
+  "usuario": "maria.lopez",
+  "fecha": "2026-03-10 09:15:00"
+}
+```
+
+### DELETE Event
+
+```json
+{
+  "evento": "DELETE",
+  "registro_id": 789,
+  "afectacion": "Work Order",
+  "valor_anterior": "OT-2026-045 (Active)",
+  "valor_actual": "Deleted (estatus=0)",
+  "detalle": "Logical deletion of OT-2026-045",
+  "usuario": "admin",
+  "fecha": "2026-03-11 11:00:00"
+}
+```
+
+<Note>
+  Most "deletions" are logical (estatus=0) not physical, so data remains accessible.
+</Note>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Reviews" icon="calendar-check">
+    Review logs weekly for unusual activity
+  </Card>
+  
+  <Card title="Monitor Sensitive Changes" icon="shield-halved">
+    Watch for permission changes and user modifications
+  </Card>
+  
+  <Card title="Document Investigations" icon="file-pen">
+    Keep notes on major findings
+  </Card>
+  
+  <Card title="Train Users" icon="chalkboard-user">
+    Use logs to identify training needs
+  </Card>
+  
+  <Card title="Secure Access" icon="lock">
+    Limit log access to administrators
+  </Card>
+  
+  <Card title="Never Delete" icon="ban">
+    Preserve complete audit trail
+  </Card>
+</CardGroup>
+
+## Performance Considerations
+
+<Warning>
+  Activity logs can grow large. For better performance:
+  - Use specific filters instead of viewing all logs
+  - Export and analyze offline for complex queries
+  - Consider database indexing on frequently filtered columns
+</Warning>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Managing Users" icon="users-gear" href="/guides/admin/managing-users">
+    User account administration
+  </Card>
+  
+  <Card title="User Permissions" icon="user-shield" href="/guides/user-permissions">
+    Understanding permission system
+  </Card>
+</CardGroup>

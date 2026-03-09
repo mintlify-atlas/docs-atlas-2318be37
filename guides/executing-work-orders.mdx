@@ -1,0 +1,554 @@
+---
+title: 'Executing Work Orders'
+description: 'Track and manage work order execution from start to completion'
+icon: 'list-check'
+---
+
+## Overview
+
+Work Orders (OTE - Órdenes de Trabajo de Ejecución) represent the execution phase of approved PTEs. This guide covers creating, tracking, and completing work orders.
+
+## Understanding Work Orders
+
+<Card title="What is an OTE?" icon="briefcase">
+  A work order is an executable document that includes:
+  - Work scope and location
+  - Timeline and schedule
+  - Resource allocation
+  - Progress tracking by steps
+  - Production tracking
+  - Financial information
+</Card>
+
+## Work Order Types
+
+<CardGroup cols={2}>
+  <Card title="Initial OT" icon="file">
+    **Type ID**: 4
+    
+    Original work order created from a completed PTE
+  </Card>
+  
+  <Card title="Reprogramming" icon="calendar-days">
+    **Type ID**: 5
+    
+    Extension or modification of an existing work order
+  </Card>
+</CardGroup>
+
+## Creating Work Orders
+
+### Option 1: From Completed PTE
+
+See [Managing Proposals - Creating Work Orders from PTEs](/guides/managing-proposals#creating-work-orders-from-ptes)
+
+### Option 2: Manual Creation
+
+<Steps>
+  <Step title="Navigate to OT Module">
+    Go to **Operaciones > Órdenes de Trabajo > Nuevo**
+  </Step>
+  
+  <Step title="Fill Basic Information">
+    Required fields:
+    
+    ```python operaciones/views/ote.py
+    @require_http_methods(["POST"])
+    @login_required
+    def crear_ot(request):
+        orden_trabajo = request.POST.get('orden_trabajo')  # Required
+        oficio_ot = request.POST.get('oficio_ot')
+        id_tipo_id = request.POST.get('id_tipo')  # 4 or 5
+        descripcion_trabajo = request.POST.get('descripcion_trabajo')
+        
+        ot = OTE.objects.create(
+            orden_trabajo=orden_trabajo,
+            oficio_ot=oficio_ot,
+            id_tipo_id=id_tipo_id,
+            descripcion_trabajo=descripcion_trabajo,
+            estatus=1,  # Active
+            id_estatus_ot_id=5  # ASIGNADA
+        )
+    ```
+  </Step>
+  
+  <Step title="Set Work Site">
+    Configure location based on frente (work front):
+    
+    <CardGroup cols={2}>
+      <Card title="Tierra / Patio" icon="industry">
+        Frente 1, 3: Select patio
+      </Card>
+      <Card title="Embarcaciones" icon="ship">
+        Frente 2, 6: Select vessel
+      </Card>
+      <Card title="Plataformas" icon="oil-well">
+        Frente 4, 7: Select platform
+      </Card>
+      <Card title="Intercom" icon="tower-broadcast">
+        Frente 5: Select intercom site
+      </Card>
+    </CardGroup>
+  </Step>
+  
+  <Step title="Configure Dates">
+    Set timeline:
+    - **Fecha Inicio Programado**: Planned start date
+    - **Fecha Término Programado**: Planned end date
+    - **Plazo Días**: Duration in days
+  </Step>
+  
+  <Step title="Financial Information">
+    Enter amounts:
+    - **Monto MXN**: Amount in Mexican Pesos
+    - **Monto USD**: Amount in US Dollars
+  </Step>
+  
+  <Step title="For Reprogramming Only">
+    If creating a reprogramming (Tipo 5):
+    - Select **OT Principal**: Parent work order
+    - Enter **Número de Reprogramación**: Sequence number
+  </Step>
+  
+  <Step title="Submit">
+    Click **Guardar** to create the work order
+    
+    <Note>
+      Steps are automatically created based on work order type and client
+    </Note>
+  </Step>
+</Steps>
+
+## Work Order Status Management
+
+### Status Types
+
+| Status | ID | Description | Use When |
+|--------|----|----|----------|
+| ASIGNADA | 5 | Assigned to team | Initial status |
+| EN PROCESO | 6 | Work started | Execution begins |
+| PAUSADA | 7 | Temporarily paused | Work stopped |
+| COMPLETADA | 10 | Finished | All work done |
+| CANCELADA | 11 | Cancelled | OT terminated |
+
+### Changing Status
+
+<Steps>
+  <Step title="Open OT Details">
+    Click on work order in the list
+  </Step>
+  
+  <Step title="Click 'Cambiar Estatus'">
+    Status change button in actions menu
+  </Step>
+  
+  <Step title="Select New Status">
+    Choose from dropdown
+  </Step>
+  
+  <Step title="Add Comment">
+    Explain reason for change
+  </Step>
+  
+  <Step title="Set Completion Date">
+    For COMPLETADA status, system auto-sets fecha_termino_real
+    
+    ```python operaciones/views/ote.py
+    @registrar_actividad
+    def cambiar_estatus_ot(request):
+        ot_id = request.POST.get('ot_id')
+        nuevo_estatus_id = request.POST.get('nuevo_estatus_id')
+        
+        ot = OTE.objects.get(id=ot_id)
+        ot.id_estatus_ot_id = nuevo_estatus_id
+        
+        # Auto-set completion date
+        if int(nuevo_estatus_id) == 10:  # COMPLETADA
+            ot.fecha_termino_real = datetime.now()
+        
+        ot.save()
+    ```
+  </Step>
+</Steps>
+
+## Managing Work Order Steps
+
+### Step Status Flow
+
+<Steps>
+  <Step title="PENDIENTE (1)">
+    Initial status - not started
+  </Step>
+  <Step title="EN PROCESO (2)">
+    Work in progress
+  </Step>
+  <Step title="COMPLETADO (3)">
+    Step finished successfully
+  </Step>
+</Steps>
+
+### Updating Step Progress
+
+```python operaciones/views/ote.py
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_paso_ot(request):
+    paso_id = request.POST.get('paso_id')
+    nuevo_estatus = request.POST.get('nuevo_estatus')
+    comentario = request.POST.get('comentario', '')
+    
+    detalle = OTDetalle.objects.get(id=paso_id)
+    detalle.estatus_paso_id = int(nuevo_estatus)
+    detalle.comentario = comentario
+    
+    # Auto-set completion date
+    if int(nuevo_estatus) == 3:
+        detalle.fecha_entrega = timezone.now()
+    
+    detalle.save()
+```
+
+<Note>
+  Each step completion date is automatically recorded for tracking purposes.
+</Note>
+
+### Attaching Files to Steps
+
+<Steps>
+  <Step title="Click File Icon">
+    On the step you want to attach evidence to
+  </Step>
+  
+  <Step title="Paste File URL">
+    Enter the URL of uploaded document (Google Drive, SharePoint, etc.)
+  </Step>
+  
+  <Step title="Save">
+    File link is stored with the step
+    
+    ```python operaciones/views/ote.py
+    @registrar_actividad
+    def guardar_archivo_ot(request):
+        paso_id = request.POST.get('paso_id')
+        url = request.POST.get('archivo')
+        
+        paso = OTDetalle.objects.get(id=paso_id)
+        paso.archivo = url
+        paso.save()
+    ```
+  </Step>
+</Steps>
+
+## Progress Tracking
+
+### Progress Calculation
+
+Work order progress combines time and step completion:
+
+```python operaciones/views/ote.py
+# Step progress (30% weight)
+detalles = ot.detalles.all()
+total_pasos = detalles.count()
+pasos_completados = detalles.filter(estatus_paso_id=3).count()
+progreso_pasos = (pasos_completados / total_pasos) * 100
+
+# Time progress (70% weight)
+today = date.today()
+if ot.fecha_inicio_programado and ot.fecha_termino_programado:
+    plazo_total = (ot.fecha_termino_programado - ot.fecha_inicio_programado).days
+    dias_transcurridos = (today - ot.fecha_inicio_programado).days
+    progreso_tiempo = (dias_transcurridos / plazo_total) * 100
+
+# Combined progress
+progreso_final = (progreso_tiempo * 0.7) + (progreso_pasos * 0.3)
+```
+
+<Card title="Progress Formula" icon="calculator">
+  **Final Progress** = (Time Progress × 70%) + (Step Progress × 30%)
+  
+  This weighted formula ensures realistic progress tracking even if steps are completed early or late.
+</Card>
+
+### Viewing Progress
+
+<CardGroup cols={3}>
+  <Card title="Progress Bar" icon="chart-bar">
+    Visual indicator in OT list
+  </Card>
+  
+  <Card title="Percentage" icon="percent">
+    Numeric value displayed
+  </Card>
+  
+  <Card title="Days Remaining" icon="clock">
+    Countdown to deadline
+  </Card>
+</CardGroup>
+
+## Reprogramming Work Orders
+
+### When to Reprogram
+
+<AccordionGroup>
+  <Accordion title="Timeline Extension" icon="calendar-plus">
+    Original deadline cannot be met - extend the work period
+  </Accordion>
+  
+  <Accordion title="Scope Change" icon="pen-to-square">
+    Additional work identified that wasn't in original OT
+  </Accordion>
+  
+  <Accordion title="Resource Reallocation" icon="people-arrows">
+    Different resources or site configuration needed
+  </Accordion>
+</AccordionGroup>
+
+### Creating a Reprogramming
+
+<Steps>
+  <Step title="Create New OT">
+    Go to **Operaciones > OT > Nuevo**
+  </Step>
+  
+  <Step title="Select Type 5">
+    Choose "Reprogramación" as the OT type
+  </Step>
+  
+  <Step title="Link to Parent OT">
+    ```python operaciones/views/ote.py
+    if str(ot.id_tipo_id) == '5':  # Reprogramming
+        ot_principal_id = request.POST.get('ot_principal')
+        num_reprogramacion = request.POST.get('num_reprogramacion')
+        
+        if not ot_principal_id:
+            return JsonResponse({
+                'exito': False,
+                'detalles': 'Must select parent OT'
+            })
+        
+        ot.ot_principal = ot_principal_id
+        ot.num_reprogramacion = num_reprogramacion
+    ```
+  </Step>
+  
+  <Step title="Set New Dates">
+    Enter extended timeline
+  </Step>
+  
+  <Step title="Submit">
+    Reprogramming is created and linked to original OT
+  </Step>
+</Steps>
+
+<Note>
+  Progress tracking automatically includes all reprogramming in the OT family.
+</Note>
+
+## Work Site Management
+
+### Primary Work Site
+
+Based on the **Frente** selection:
+
+```python operaciones/views/ote.py
+# User selects frente (work front)
+id_frente_input = request.POST.get('id_frente')
+
+if id_frente_input == 1:  # Tierra
+    ot.id_patio = request.POST.get('id_patio')
+else:
+    # Set appropriate site field
+    ot.id_embarcacion = request.POST.get('id_embarcacion')
+    ot.id_plataforma = request.POST.get('id_plataforma')
+    ot.id_intercom = request.POST.get('id_intercom')
+```
+
+### Yard Phase Configuration
+
+For offshore work requiring yard preparation:
+
+<Steps>
+  <Step title="Enable Yard Phase">
+    Check "Requiere Fase de Patio"
+  </Step>
+  
+  <Step title="Select Yard">
+    Choose patio for preparation work
+  </Step>
+  
+  <Step title="Set Yard Dates">
+    ```python
+    ot.requiere_patio = True
+    ot.id_patio = request.POST.get('id_patio_fase')
+    ot.fecha_inicio_patio = request.POST.get('fecha_inicio_patio')
+    ot.fecha_fin_patio = request.POST.get('fecha_fin_patio')
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  When yard phase is active, production tracking requires selecting the specific site (yard or final location).
+</Warning>
+
+## Importing Annex Data
+
+### Excel Import Process
+
+<Steps>
+  <Step title="Prepare Excel File">
+    Format must include columns:
+    - ANEXO
+    - PARTIDA
+    - CONCEPTO
+    - UNIDAD
+    - VOLUMEN PTE
+    - P.U. M.N.
+    - P.U. USD (optional)
+  </Step>
+  
+  <Step title="Upload File">
+    Click **Importar Anexo** button on OT details page
+  </Step>
+  
+  <Step title="System Validation">
+    ```python operaciones/views/ote.py
+    # Validate units exist
+    unidad_id_resuelto = unidades_lookup.get(norm_unidad_txt)
+    if not unidad_id_resuelto:
+        errores_validacion.append({
+            'OBSERVACIONES_SISTEMA': f"Unidad '{raw_unidad}' no existe"
+        })
+    
+    # Validate concepts in catalog
+    key_busqueda = (norm_codigo, norm_concepto, unidad_id_resuelto)
+    producto_encontrado = catalogo_map.get(key_busqueda)
+    
+    if not producto_encontrado:
+        errores_validacion.append({
+            'OBSERVACIONES_SISTEMA': 'NO ENCONTRADO en catálogo'
+        })
+    ```
+  </Step>
+  
+  <Step title="Review Errors">
+    If validation fails:
+    - Download error report
+    - Fix issues in Excel
+    - Re-upload
+  </Step>
+  
+  <Step title="Confirm Import">
+    Valid records are imported as PartidaAnexoImportada
+  </Step>
+</Steps>
+
+<Note>
+  Only one active import per OT. New imports replace previous ones (es_activo flag).
+</Note>
+
+## Adding Individual Items
+
+To add concepts not in the Excel import:
+
+<Steps>
+  <Step title="Search Master Catalog">
+    Use the search function to find concepts
+  </Step>
+  
+  <Step title="Select Concept">
+    Click to add to OT annex
+  </Step>
+  
+  <Step title="System Creates Link">
+    ```python operaciones/views/produccion.py
+    @require_http_methods(["POST"])
+    def vincular_partida_ot(request):
+        id_ot = request.POST.get('id_ot')
+        id_concepto = request.POST.get('id_producto')
+        
+        importacion = ImportacionAnexo.objects.filter(
+            ot_id=id_ot, es_activo=True
+        ).first()
+        
+        concepto = ConceptoMaestro.objects.get(id=id_concepto)
+        
+        PartidaAnexoImportada.objects.create(
+            importacion_anexo=importacion,
+            id_partida=codigo_partida,
+            descripcion_concepto=concepto.descripcion,
+            volumen_proyectado=0,  # To be updated
+            precio_unitario_mn=concepto.precio_unitario_mn,
+            precio_unitario_usd=concepto.precio_unitario_usd
+        )
+    ```
+  </Step>
+</Steps>
+
+## Filtering and Searching Work Orders
+
+<CardGroup cols={2}>
+  <Card title="By Type" icon="filter">
+    Filter Initial OTs (4) or Reprogramming (5)
+  </Card>
+  
+  <Card title="By Status" icon="traffic-light">
+    ASIGNADA, EN PROCESO, COMPLETADA, etc.
+  </Card>
+  
+  <Card title="By Site" icon="location-dot">
+    Filter by work location
+  </Card>
+  
+  <Card title="By Year" icon="calendar">
+    Filter by year from oficio or start date
+  </Card>
+  
+  <Card title="By Client" icon="building">
+    Filter by client organization
+  </Card>
+  
+  <Card title="By Responsible" icon="user">
+    Filter by project manager
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Update Progress Daily" icon="calendar-day">
+    Keep step status current for accurate tracking
+  </Card>
+  
+  <Card title="Document Changes" icon="file-pen">
+    Use comments to explain status changes
+  </Card>
+  
+  <Card title="Attach Evidence" icon="paperclip">
+    Link all deliverables and documentation
+  </Card>
+  
+  <Card title="Monitor Deadlines" icon="bell">
+    Check dias_restantes regularly
+  </Card>
+  
+  <Card title="Validate Imports" icon="check-double">
+    Always review Excel import errors
+  </Card>
+  
+  <Card title="Plan Reprogramming" icon="calendar-plus">
+    Create reprogramming early if deadlines at risk
+  </Card>
+</CardGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Recording Production" icon="industry" href="/guides/recording-production">
+    Track production volumes for work orders
+  </Card>
+  
+  <Card title="Managing Proposals" icon="file-lines" href="/guides/managing-proposals">
+    Create PTEs that generate work orders
+  </Card>
+</CardGroup>

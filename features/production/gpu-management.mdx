@@ -1,0 +1,527 @@
+---
+title: GPU Management
+description: Manage photographic evidence and administrative tracking for unit price generators (C-2 and C-3 annexes)
+icon: image
+---
+
+## Overview
+
+GPU (Generadores de Precio Unitario) management provides photographic evidence tracking and administrative control for specific contract annexes that require visual documentation. This system serves as both an evidence repository and an administrative mirror for billing validation.
+
+<Warning>
+  GPU registries are **only** created for annexes C-2, C-3, C2EXT, and C3EXT. Other annexes do not require GPU evidence.
+</Warning>
+
+## RegistroGPU Model
+
+<CodeGroup>
+```python produccion_models.py:90-104
+class RegistroGPU(models.Model):
+    """
+    pro_registro_gpu (Espejo Administrativo y Evidencias).
+    Solo se crea para C-2 y C-3.
+    """
+    id_produccion = models.OneToOneField(Produccion, on_delete=models.CASCADE, related_name='gpu')
+    id_estatus = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 6}, verbose_name="Estatus GPU")
+    archivo = models.URLField(max_length=500, blank=True, null=True, verbose_name="Link Evidencia Fotográfica")
+    nota_bloqueo = models.TextField(blank=True, verbose_name="Observaciones", null=True)
+    id_estimacion_detalle = models.ForeignKey('EstimacionDetalle', on_delete=models.SET_NULL, null=True, blank=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'registro_generadores_pu'
+```
+</CodeGroup>
+
+### Field Descriptions
+
+<ParamField path="id_produccion" type="OneToOneField(Produccion)" required>
+  Parent production record requiring GPU evidence
+  
+  **Relationship:** Each production record can have at most one GPU registry
+</ParamField>
+
+<ParamField path="id_estatus" type="ForeignKey(Estatus)" required>
+  Administrative status of the GPU evidence
+  
+  **Constraint:** `nivel_afectacion=6` (GPU-specific statuses)
+  
+  **Common Values:**
+  - Pendiente (Pending)
+  - Cargado (Uploaded)
+  - Validado (Validated)
+  - Rechazado (Rejected)
+</ParamField>
+
+<ParamField path="archivo" type="URLField(500)">
+  Google Drive link to photographic evidence
+  
+  **Format:** Typically links to a Drive folder containing multiple photos
+</ParamField>
+
+<ParamField path="nota_bloqueo" type="TextField">
+  Administrative notes or rejection reasons
+  
+  **Usage:** Document why evidence was rejected or requires resubmission
+</ParamField>
+
+<ParamField path="id_estimacion_detalle" type="ForeignKey(EstimacionDetalle)">
+  Links GPU to specific billing estimation line item
+  
+  **Purpose:** Tracks which billing cycle included this production
+</ParamField>
+
+<ParamField path="fecha_actualizacion" type="DateTimeField" auto>
+  Timestamp of last status or evidence update
+</ParamField>
+
+## Automatic GPU Creation
+
+GPU registries are automatically created when production is saved for eligible annexes.
+
+<CodeGroup>
+```python produccion.py:835-869
+try:
+    estatus_pendiente = Estatus.objects.get(id=20)  # Pendiente status
+except Estatus.DoesNotExist:
+    estatus_pendiente = None
+
+if estatus_pendiente:
+    anexos_validos_gpu = ['C-2', 'C-3', 'C2EXT', 'C3EXT']
+
+    # Find all production records that need GPU tracking
+    producciones_validas_gpu = Produccion.objects.filter(
+        id_reporte_mensual=reporte_mensual,
+        volumen_produccion__gt=0,
+        id_partida_anexo__anexo__in=anexos_validos_gpu
+    ).values_list('id', flat=True)
+
+    # Check which already have GPU registries
+    gpus_existentes = RegistroGPU.objects.filter(
+        id_produccion__in=producciones_validas_gpu
+    ).values_list('id_produccion', flat=True)
+
+    # Create missing GPU registries
+    ids_faltantes = set(producciones_validas_gpu) - set(gpus_existentes)
+
+    gpus_nuevos = []
+    for pid in ids_faltantes:
+        gpus_nuevos.append(RegistroGPU(
+            id_produccion_id=pid,
+            id_estatus=estatus_pendiente,
+        ))
+    
+    if gpus_nuevos:
+        RegistroGPU.objects.bulk_create(gpus_nuevos)
+
+    # Clean up GPU registries for production with zero volume
+    RegistroGPU.objects.filter(
+        id_produccion__id_reporte_mensual=reporte_mensual,
+        id_produccion__volumen_produccion=0
+    ).delete()
+```
+</CodeGroup>
+
+<Info>
+  **Automatic Lifecycle:**
+  1. Production saved with volume > 0 for C-2/C-3 annex → GPU created with "Pendiente" status
+  2. User uploads evidence → Status changes to "Cargado"
+  3. Supervisor validates → Status changes to "Validado"
+  4. If production volume reduced to 0 → GPU automatically deleted
+</Info>
+
+## Loading GPU Grid Data
+
+The system provides a grid view showing all GPU-eligible production with evidence status.
+
+<CodeGroup>
+```python produccion.py:1146-1219
+@login_required
+def obtener_grid_gpus(request):
+    """
+    Retorna la matriz de datos para el DataTable de GPUs.
+    """
+    try:
+        id_ot = request.GET.get('id_ot')
+        mes = request.GET.get('mes')
+        anio = request.GET.get('anio')
+        
+        if not id_ot or not mes or not anio:
+            return JsonResponse({'data': []})
+
+        anexos_validos_gpu = ['C-2', 'C-3', 'C2EXT', 'C3EXT']
+
+        reporte = ReporteMensual.objects.filter(id_ot_id=id_ot, mes=mes, anio=anio).first()
+        if not reporte:
+            return JsonResponse({'data': []})
+
+        # Load all production requiring GPU evidence
+        producciones = Produccion.objects.filter(
+            id_reporte_mensual=reporte,
+            volumen_produccion__gt=0.00,
+            id_partida_anexo__anexo__in=anexos_validos_gpu,
+            id_partida_anexo__importacion_anexo__es_activo=True
+        ).select_related('id_partida_anexo', 'id_partida_anexo__unidad_medida', 'gpu', 'gpu__id_estatus')
+
+        data_map = {}
+
+        for prod in producciones:
+            partida = prod.id_partida_anexo
+            pid = partida.id
+            
+            if pid not in data_map:
+                unidad_clave = str(partida.unidad_medida.clave) if hasattr(partida.unidad_medida, 'clave') else str(partida.unidad_medida)
+                
+                data_map[pid] = {
+                    'id_partida_anexo': pid,
+                    'codigo': partida.id_partida,
+                    'descripcion': partida.descripcion_concepto,
+                    'unidad': unidad_clave,
+                    'anexo': str(partida.anexo),
+                    **{f'dia_{d}': None for d in range(1, 32)}
+                }
+
+            dia = prod.fecha_produccion.day
+            
+            # Build day cell data
+            estado_gpu = {
+                'id_produccion': prod.id,
+                'volumen': prod.volumen_produccion,
+                'estatus_id': 19,  # Default: Pendiente
+                'estatus_texto': 'PENDIENTE',
+                'archivos_count': 0,
+                'archivo': ''
+            }
+
+            # Check if GPU registry exists
+            if hasattr(prod, 'gpu'):
+                gpu = prod.gpu
+                estado_gpu['estatus_id'] = gpu.id_estatus.id
+                estado_gpu['estatus_texto'] = str(gpu.id_estatus.descripcion if hasattr(gpu.id_estatus, 'descripcion') else gpu.id_estatus)
+                
+                evidencias = gpu.archivo
+                if evidencias:
+                    estado_gpu['archivos_count'] = 1
+                    estado_gpu['archivo'] = evidencias
+                
+                estado_gpu['id_gpu'] = gpu.id
+
+            data_map[pid][f'dia_{dia}'] = estado_gpu
+
+        return JsonResponse({'data': list(data_map.values())})
+
+    except Exception as e:
+        print(f"Error en obtener_grid_gpus: {str(e)}")
+        return JsonResponse({'error': str(e)}, status=500)
+```
+</CodeGroup>
+
+<Tip>
+  The GPU grid displays one row per budget line item with columns for each day of the month. Cells show production volume, evidence status, and link count.
+</Tip>
+
+## Saving GPU Evidence
+
+Users can update GPU status and attach evidence links through the management interface.
+
+<CodeGroup>
+```python produccion.py:1221-1252
+@login_required
+@require_http_methods(["POST"])
+def guardar_estatus_gpu(request):
+    """
+    Actualiza el estatus y el archivo de evidencia de un generador.
+    """
+    try:
+        data = json.loads(request.body)
+        id_produccion = data.get('id_produccion')
+        nuevo_estatus_id = data.get('estatus_id')
+        archivo_url = data.get('archivo')
+
+        if not id_produccion:
+            return JsonResponse({'exito': False, 'mensaje': 'ID de producción no proporcionado'})
+
+        produccion = get_object_or_404(Produccion, pk=id_produccion)
+
+        # Update or create GPU registry
+        gpu, created = RegistroGPU.objects.update_or_create(
+            id_produccion=produccion,
+            defaults={
+                'id_estatus_id': nuevo_estatus_id,
+                'archivo': archivo_url
+            }
+        )
+
+        accion = "creado" if created else "actualizado"
+        return JsonResponse({'exito': True, 'mensaje': f'Registro GPU {accion} correctamente'})
+
+    except Exception as e:
+        print(f"Error en guardar_estatus_gpu: {str(e)}")
+        return JsonResponse({'exito': False, 'mensaje': f'Error interno: {str(e)}'})
+```
+</CodeGroup>
+
+<Info>
+  The system uses `update_or_create` to handle both new GPU registries and updates to existing ones in a single operation.
+</Info>
+
+## GPU Status Workflow
+
+<Steps>
+  <Step title="Automatic Creation (Pendiente)">
+    When production is saved for C-2/C-3 annex with volume > 0
+    
+    **Status:** Pendiente (ID: 19)
+  </Step>
+  
+  <Step title="Evidence Upload (Cargado)">
+    Site supervisor uploads photos to Google Drive and attaches link
+    
+    **Status:** Cargado (ID: 20)
+  </Step>
+  
+  <Step title="Administrative Review (En Revisión)">
+    Office staff reviews evidence for completeness and quality
+    
+    **Status:** En Revisión (ID: 21)
+  </Step>
+  
+  <Step title="Validation or Rejection">
+    Evidence is either validated (accepted) or rejected with notes
+    
+    **Status:** Validado (ID: 22) or Rechazado (ID: 23)
+  </Step>
+  
+  <Step title="Billing Integration">
+    Validated GPUs are linked to estimation detail records
+    
+    **Field:** `id_estimacion_detalle` populated
+  </Step>
+</Steps>
+
+## Evidence Requirements
+
+<AccordionGroup>
+  <Accordion title="C-2 Annex: Personnel" icon="user-hard-hat">
+    **Required Photos:**
+    - Personnel at work site with timestamp
+    - Safety equipment visible (helmets, harnesses, etc.)
+    - Work area overview showing activity
+    - Daily attendance sheet or sign-in log
+    
+    **Photo Naming Convention:**
+    ```
+    OTE-2025-001_C2_2025-03-15_Foto1.jpg
+    OTE-2025-001_C2_2025-03-15_Foto2.jpg
+    ```
+  </Accordion>
+  
+  <Accordion title="C-3 Annex: Equipment" icon="truck">
+    **Required Photos:**
+    - Equipment on-site (cranes, generators, vehicles)
+    - Equipment ID plates/numbers visible
+    - Operating hours meter reading
+    - Work being performed with equipment
+    
+    **Additional Documentation:**
+    - Equipment rental agreement (if applicable)
+    - Maintenance logs for the day
+    - Fuel consumption records
+  </Accordion>
+  
+  <Accordion title="Extended Annexes (C2EXT, C3EXT)" icon="plus">
+    Same requirements as C-2 and C-3 respectively, but for extended contract periods.
+    
+    **Note:** Use separate Drive folders for base contract vs extensions.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+  **Quality Standards:**
+  - Minimum resolution: 1280x720 pixels
+  - Photos must be in focus and well-lit
+  - GPS metadata preferred (if available)
+  - No photo editing or filters
+  - All photos must have accurate date/time stamps
+</Warning>
+
+## GPU Grid Visualization
+
+The GPU management interface displays a matrix with:
+
+<CardGroup cols={3}>
+  <Card title="Budget Line Items" icon="list">
+    Rows showing each C-2/C-3 line item code and description
+  </Card>
+  <Card title="Daily Columns" icon="calendar">
+    Columns for days 1-31 with production volume and status indicator
+  </Card>
+  <Card title="Status Indicators" icon="circle-dot">
+    Color-coded cells:
+    - 🔴 Red: Pendiente
+    - 🟡 Yellow: Cargado
+    - 🔵 Blue: En Revisión
+    - 🟢 Green: Validado
+    - ⚫ Black: Rechazado
+  </Card>
+</CardGroup>
+
+## Integration with Billing
+
+Once validated, GPU registries link to billing estimation details:
+
+<CodeGroup>
+```python produccion_models.py:124-135
+class EstimacionDetalle(models.Model):
+    id_estimacion_header = models.ForeignKey(EstimacionHeader, on_delete=models.CASCADE, related_name='detalles')
+    id_produccion = models.ForeignKey(Produccion, on_delete=models.CASCADE)
+    volumen_actual = models.DecimalField(max_digits=15, decimal_places=2)
+    volumen_estimado = models.DecimalField(max_digits=15, decimal_places=2,default=0)
+    id_estatus_cobro = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 3})
+    comentario_ajuste = models.TextField(blank=True)
+    
+    class Meta:
+        db_table = 'estimacion_detalle'
+
+    def __str__(self):
+        return f"Detalle Estimación {self.id} - Prod {self.id_produccion.id}"
+```
+</CodeGroup>
+
+<Info>
+  The `id_estimacion_detalle` field in RegistroGPU creates a bidirectional link, allowing auditors to trace from billing back to photographic evidence.
+</Info>
+
+## API Endpoint Reference
+
+<AccordionGroup>
+  <Accordion title="GET /produccion/obtener_grid_gpus/" icon="code">
+    Returns GPU evidence matrix for a specific work order and month.
+    
+    **Query Parameters:**
+    ```yaml
+    id_ot: integer (required) - Work order ID
+    mes: integer (required) - Month (1-12)
+    anio: integer (required) - Year (e.g., 2025)
+    ```
+    
+    **Response Structure:**
+    ```json
+    {
+      "data": [
+        {
+          "id_partida_anexo": 456,
+          "codigo": "C-2.1.1",
+          "descripcion": "Técnico especializado",
+          "unidad": "JOR",
+          "anexo": "C-2",
+          "dia_1": null,
+          "dia_2": {
+            "id_produccion": 789,
+            "volumen": 8.0,
+            "estatus_id": 20,
+            "estatus_texto": "CARGADO",
+            "archivos_count": 1,
+            "archivo": "https://drive.google.com/...",
+            "id_gpu": 123
+          },
+          ...
+          "dia_31": null
+        }
+      ]
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="POST /produccion/guardar_estatus_gpu/" icon="code">
+    Updates GPU status and evidence link.
+    
+    **Request Body:**
+    ```json
+    {
+      "id_produccion": 789,
+      "estatus_id": 20,
+      "archivo": "https://drive.google.com/drive/folders/abc123"
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+      "exito": true,
+      "mensaje": "Registro GPU actualizado correctamente"
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Daily Photo Uploads">
+    Upload evidence at end of each workday while details are fresh
+  </Step>
+  
+  <Step title="Organized Folder Structure">
+    Use consistent Drive folder organization:
+    ```
+    OTE-2025-001_Marzo_2025/
+      ├── C2_Personal/
+      │   ├── 2025-03-01/
+      │   ├── 2025-03-02/
+      │   └── ...
+      └── C3_Equipo/
+          ├── 2025-03-01/
+          ├── 2025-03-02/
+          └── ...
+    ```
+  </Step>
+  
+  <Step title="Prompt Validation">
+    Validate evidence within 48 hours to catch missing photos while still correctable
+  </Step>
+  
+  <Step title="Rejection Documentation">
+    Always fill `nota_bloqueo` field when rejecting evidence with specific reasons
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="GPU Not Auto-Created">
+    **Possible Causes:**
+    1. Annex is not in ['C-2', 'C-3', 'C2EXT', 'C3EXT']
+    2. Production volume is 0
+    3. Estatus with ID 20 (Pendiente) doesn't exist in database
+    
+    **Solution:** Verify annex code exactly matches (case-sensitive) and ensure volume > 0.
+  </Accordion>
+  
+  <Accordion title="Can't Update GPU Status">
+    **Cause:** Monthly report is closed or GPU is already linked to a billed estimation.
+    
+    **Solution:** Check `id_estimacion_detalle` - if populated, contact billing department to unlock.
+  </Accordion>
+  
+  <Accordion title="Drive Link Shows Access Denied">
+    **Cause:** Folder permissions not set correctly.
+    
+    **Solution:**
+    1. Open folder in Google Drive
+    2. Click "Share"
+    3. Set to "Anyone with the link can view"
+    4. Save and re-test link in private browser
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Production Overview" icon="chart-line" href="/features/production/overview">
+    Return to production tracking overview
+  </Card>
+  <Card title="Monthly Reports" icon="folder" href="/features/production/monthly-reports">
+    Learn about monthly report consolidation
+  </Card>
+</CardGroup>

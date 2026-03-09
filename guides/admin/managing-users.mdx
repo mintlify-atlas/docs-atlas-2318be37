@@ -1,0 +1,487 @@
+---
+title: 'Managing Users'
+description: 'Administrator guide to user management in SASCOP BME SubTec'
+icon: 'users-gear'
+---
+
+## Overview
+
+This guide is for administrators responsible for creating and managing user accounts, permissions, and access control in SASCOP BME SubTec.
+
+<Warning>
+  This section requires administrator privileges. Standard users cannot access these features.
+</Warning>
+
+## User Management Basics
+
+SASCOP uses Django's built-in User model:
+
+```python django.contrib.auth.models.User
+class User:
+    username: str          # Unique login identifier
+    email: str            # User email (also usable for login)
+    first_name: str       # User's first name
+    last_name: str        # User's last name
+    password: str         # Hashed password
+    is_active: bool       # Can user log in?
+    is_staff: bool        # Access to admin interface?
+    is_superuser: bool    # Full system access?
+    date_joined: datetime # Account creation date
+    last_login: datetime  # Last successful login
+```
+
+## Accessing User Management
+
+<Steps>
+  <Step title="Open Django Admin">
+    Navigate to `/admin/` URL
+  </Step>
+  
+  <Step title="Login as Administrator">
+    Use your admin credentials
+  </Step>
+  
+  <Step title="Navigate to Users">
+    Click **Authentication and Authorization > Users**
+  </Step>
+</Steps>
+
+## Creating New Users
+
+<Steps>
+  <Step title="Click 'Add User'">
+    Button in top-right of Users list
+  </Step>
+  
+  <Step title="Enter Basic Information">
+    **Required fields**:
+    - Username (unique)
+    - Password (confirm twice)
+  </Step>
+  
+  <Step title="Click 'Save and Continue'">
+    Creates the user account
+  </Step>
+  
+  <Step title="Complete Profile">
+    Fill in additional information:
+    - First name
+    - Last name
+    - Email address
+    
+    **Permissions**:
+    - Active (allows login)
+    - Staff status (admin access)
+    - Superuser status (full access)
+  </Step>
+  
+  <Step title="Assign Groups">
+    Add user to role-based groups:
+    - Project Managers
+    - Field Supervisors
+    - Accounting
+    - Read-Only Users
+  </Step>
+  
+  <Step title="Set Specific Permissions">
+    Grant individual permissions as needed
+  </Step>
+  
+  <Step title="Save User">
+    Click **Save** to finalize
+  </Step>
+</Steps>
+
+## User Status Management
+
+### Active Status
+
+<Card title="is_active Flag" icon="toggle-on">
+  **True**: User can log in and access the system
+  
+  **False**: User account is disabled
+  - Cannot log in
+  - Sessions are terminated
+  - Used for temporary suspension or departed employees
+  
+  ```python operaciones/views/registro_actividad.py
+  usuarios = User.objects.filter(is_active=True).values(
+      'id', 'username', 'first_name', 'last_name', 'email'
+  )
+  ```
+</Card>
+
+<Steps>
+  <Step title="To Deactivate User">
+    - Open user in admin
+    - Uncheck "Active" checkbox
+    - Save
+  </Step>
+  
+  <Step title="To Reactivate User">
+    - Open user in admin
+    - Check "Active" checkbox
+    - Save
+  </Step>
+</Steps>
+
+### Staff Status
+
+<Card title="is_staff Flag" icon="user-tie">
+  **True**: User can access Django admin interface at `/admin/`
+  
+  **False**: No admin access (standard user)
+  
+  <Note>
+    Staff status does NOT automatically grant all permissions - you must still assign specific permissions.
+  </Note>
+</Card>
+
+### Superuser Status
+
+<Card title="is_superuser Flag" icon="user-crown">
+  **True**: User has ALL permissions automatically
+  - Can modify any data
+  - Can create/delete users
+  - Can access all modules
+  - Bypasses all permission checks
+  
+  **False**: User has only assigned permissions
+  
+  <Warning>
+    Use superuser status sparingly. Most administrators should use staff status with specific permissions.
+  </Warning>
+</Card>
+
+## Password Management
+
+### Setting Initial Password
+
+When creating a user:
+1. Enter password twice in creation form
+2. Password is automatically hashed
+3. Never store passwords in plain text
+
+### Password Requirements
+
+```python bme_subtec/settings.py
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+```
+
+Passwords must:
+- Not be similar to user information
+- Meet minimum length
+- Not be commonly used passwords
+- Not be entirely numeric
+
+### Resetting User Password
+
+<Steps>
+  <Step title="Open User in Admin">
+    Find user in Users list
+  </Step>
+  
+  <Step title="Click Password Link">
+    "this form" link next to password field
+  </Step>
+  
+  <Step title="Enter New Password">
+    Type new password twice
+  </Step>
+  
+  <Step title="Save">
+    Password is immediately changed
+  </Step>
+  
+  <Step title="Notify User">
+    Securely communicate new password to user
+  </Step>
+</Steps>
+
+<Note>
+  Users cannot reset their own passwords. Contact your system administrator if you need to implement self-service password reset.
+</Note>
+
+## Email-Based Authentication
+
+SASCOP allows users to log in with either username OR email:
+
+```python operaciones/views/login.py
+@ensure_csrf_cookie 
+def custom_login(request):
+    username_or_email = request.POST.get('username')
+    password = request.POST.get('password')
+    
+    # Try username first
+    user = authenticate(request, username=username_or_email, password=password)
+    
+    # If that fails, try email
+    if user is None:
+        try:
+            user_by_email = User.objects.get(email__iexact=username_or_email)
+            user = authenticate(request, username=user_by_email.username, password=password)
+        except User.DoesNotExist:
+            user = None
+```
+
+<Card title="Email Requirements" icon="envelope">
+  For email login to work:
+  - Email field must be filled in
+  - Email should be unique (not enforced by Django, but recommended)
+  - Email is case-insensitive
+</Card>
+
+## Permission Assignment
+
+### Using Groups (Recommended)
+
+<Steps>
+  <Step title="Create Groups">
+    **Django Admin > Groups > Add Group**
+    
+    Example groups:
+    - Project Managers
+    - Field Supervisors
+    - Accounting Staff
+    - Read-Only Users
+  </Step>
+  
+  <Step title="Assign Permissions to Group">
+    Select appropriate permissions:
+    - View permissions (view_*)
+    - Add permissions (add_*)
+    - Change permissions (change_*)
+    - Delete permissions (delete_*)
+    - Custom permissions (view_centro_consulta, etc.)
+  </Step>
+  
+  <Step title="Add Users to Groups">
+    In user admin:
+    - Select groups in "Groups" field
+    - User inherits all group permissions
+  </Step>
+</Steps>
+
+### Direct Permission Assignment
+
+For special cases, assign permissions directly:
+
+<Steps>
+  <Step title="Open User in Admin">
+    Navigate to user details
+  </Step>
+  
+  <Step title="Scroll to Permissions">
+    Find "User permissions" section
+  </Step>
+  
+  <Step title="Select Permissions">
+    Use filter and double-click to move permissions:
+    - From "Available permissions" 
+    - To "Chosen permissions"
+  </Step>
+  
+  <Step title="Save User">
+    Permissions take effect immediately
+  </Step>
+</Steps>
+
+## Viewing User Activity
+
+Track what users are doing:
+
+```python operaciones/views/registro_actividad.py
+@login_required
+def datatable_registro_actividad(request):
+    usuario_id = request.GET.get('usuario_id')
+    
+    registros = RegistroActividad.objects.select_related('usuario_id').all()
+    
+    if usuario_id:
+        registros = registros.filter(usuario_id_id=usuario_id)
+```
+
+<Steps>
+  <Step title="Access Activity Logs">
+    Navigate to **Configuración > Registro de Actividad**
+  </Step>
+  
+  <Step title="Filter by User">
+    Select user from dropdown filter
+  </Step>
+  
+  <Step title="Review Actions">
+    See all CREATE, UPDATE, DELETE actions
+  </Step>
+</Steps>
+
+## User Listing API
+
+For integration or custom interfaces:
+
+```python operaciones/views/registro_actividad.py
+@login_required(login_url='/accounts/login/')
+def obtener_usuarios(request):
+    usuarios = User.objects.filter(is_active=True).values(
+        'id', 'username', 'first_name', 'last_name', 'email'
+    )
+    
+    usuarios_list = []
+    for usuario in usuarios:
+        usuarios_list.append({
+            'id': usuario['id'],
+            'username': usuario['username'],
+            'descripcion': f"{usuario['first_name']} {usuario['last_name']} ({usuario['username']})"
+        })
+    
+    return JsonResponse(usuarios_list, safe=False)
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Groups" icon="users">
+    Assign permissions via groups for easier management
+  </Card>
+  
+  <Card title="Least Privilege" icon="lock">
+    Grant only minimum necessary permissions
+  </Card>
+  
+  <Card title="Regular Audits" icon="magnifying-glass">
+    Review user accounts quarterly
+  </Card>
+  
+  <Card title="Deactivate Promptly" icon="user-slash">
+    Disable accounts immediately when users leave
+  </Card>
+  
+  <Card title="Strong Passwords" icon="key">
+    Enforce password complexity requirements
+  </Card>
+  
+  <Card title="Document Changes" icon="file-pen">
+    Keep records of permission changes and reasons
+  </Card>
+</CardGroup>
+
+## Common Scenarios
+
+### New Field Supervisor
+
+<Steps>
+  <Step title="Create Account">
+    Username: supervisor.lastname
+    Email: supervisor@company.com
+  </Step>
+  
+  <Step title="Set Status">
+    - Active: True
+    - Staff: False
+    - Superuser: False
+  </Step>
+  
+  <Step title="Assign Group">
+    Add to "Field Supervisors" group
+  </Step>
+  
+  <Step title="Verify Permissions">
+    Should have:
+    - View PTEs and OTs
+    - Add/Change Production
+    - View Reports
+  </Step>
+</Steps>
+
+### Temporary Contractor
+
+<Steps>
+  <Step title="Create Limited Account">
+    Set appropriate username and email
+  </Step>
+  
+  <Step title="Grant Read-Only Access">
+    Add to "Read-Only Users" group
+  </Step>
+  
+  <Step title="Document Expiration">
+    Note in user comments when access should end
+  </Step>
+  
+  <Step title="Deactivate on Schedule">
+    Set calendar reminder to disable account
+  </Step>
+</Steps>
+
+### Promoted Employee
+
+<Steps>
+  <Step title="Review Current Access">
+    Check existing groups and permissions
+  </Step>
+  
+  <Step title="Add New Groups">
+    Assign additional groups for new role
+  </Step>
+  
+  <Step title="Remove Old Groups (if applicable)">
+    Remove groups no longer needed
+  </Step>
+  
+  <Step title="Verify Access">
+    Test login and verify new permissions work
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="User Cannot Log In" icon="ban">
+    **Checklist**:
+    - Is `is_active` checked?
+    - Is password correct?
+    - Is account locked out?
+    - Check session timeout settings
+  </Accordion>
+  
+  <Accordion title="User Cannot Access Feature" icon="lock">
+    **Checklist**:
+    - Does user have required permission?
+    - Is user in correct group?
+    - Is feature restricted by custom logic?
+    - Check activity log for denial reasons
+  </Accordion>
+  
+  <Accordion title="Email Login Not Working" icon="envelope">
+    **Checklist**:
+    - Is email field populated?
+    - Is email address correct?
+    - Try username instead
+    - Check for typos (case doesn't matter)
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="User Permissions" icon="user-shield" href="/guides/user-permissions">
+    User guide to understanding permissions
+  </Card>
+  
+  <Card title="Activity Logs" icon="clock-rotate-left" href="/guides/admin/activity-logs">
+    Monitoring user activity
+  </Card>
+</CardGroup>

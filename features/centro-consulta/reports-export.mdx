@@ -1,0 +1,697 @@
+---
+title: 'Reports & Export'
+description: 'Excel generation, email delivery, and bulk data exports with openpyxl'
+icon: 'file-excel'
+---
+
+## Overview
+
+The Reports & Export system provides:
+
+- **Excel Generation**: Multi-sheet workbooks with formatting and hyperlinks
+- **Email Delivery**: Automated report distribution with image attachments
+- **Bulk Export**: Large dataset handling with memory-efficient streaming
+- **File Validation**: Size and record count limits for email safety
+
+## Excel Export API
+
+### POST /centro_consulta/descargar-excel/
+
+```python operaciones/views/centro_consulta.py
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def fn_api_descargar_excel_bi(request):
+    try:
+        cuerpo_peticion = json.loads(request.body)
+        filtros = cuerpo_peticion.get("filtros", {})
+        origenes = filtros.get("origenes", [])
+
+        subconsulta_dinamica = fn_obtener_subconsulta_origenes(origenes)
+        clausula_where, params = fn_construir_where_dinamico(filtros)
+
+        sql_excel = f"""
+            SELECT
+                T.tipo AS "Origen",
+                T.folio AS "Folio",
+                T.cliente AS "Cliente",
+                T.lider AS "Líder",
+                T.frente AS "Frente",
+                CASE
+                    WHEN %(buscar_por_frente)s = '1' THEN T.sitio_oficial
+                    WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_plataforma::text IN %(ids_sitios)s THEN T.sitio_plat_desc
+                    WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_embarcacion::text IN %(ids_sitios)s THEN T.sitio_emb_desc
+                    WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_patio::text IN %(ids_sitios)s THEN T.sitio_pat_desc
+                    ELSE CONCAT_WS(' / ', NULLIF(T.sitio_pat_desc, ''), NULLIF(T.sitio_emb_desc, ''), NULLIF(T.sitio_plat_desc, ''))
+                END AS "Sitio",
+                T.documento AS "Documento",
+                T._descripcion_estatus AS "Estatus",
+                CASE
+                    WHEN T.archivo IS NOT NULL AND LENGTH(TRIM(T.archivo)) > 5 THEN 'ENTREGADO'
+                    WHEN T._fid_estatus_paso = 14 THEN 'NO APLICA'
+                    ELSE 'PENDIENTE'
+                END AS "Estado Archivo",
+                T.archivo AS "Enlace Documento",
+                T.fecha AS "Fecha Modificación"
+            FROM (
+                {subconsulta_dinamica}
+            ) AS T
+            {clausula_where}
+            ORDER BY T._fecha_sort ASC NULLS LAST;
+        """
+
+        registros = fn_ejecutar_query_sql_lotes(sql_excel, params)
+
+        # Create Excel workbook with openpyxl
+        libro_trabajo = openpyxl.Workbook(write_only=True)
+        hoja_pte = libro_trabajo.create_sheet(title="Reporte PTE")
+        hoja_ot = libro_trabajo.create_sheet(title="Reporte OT")
+        hoja_prod = libro_trabajo.create_sheet(title="Reporte PROD")
+
+        diccionario_hojas = {"PTE": hoja_pte, "OT": hoja_ot, "PROD": hoja_prod}
+        conteos_hojas = {"PTE": 0, "OT": 0, "PROD": 0}
+
+        # Styling
+        estilo_cabecera = PatternFill(start_color="F05523", end_color="F05523", fill_type="solid")
+        fuente_cabecera = Font(color="FFFFFF", bold=True)
+        fuente_enlace = Font(color="0563C1", underline="single")
+        alineacion_centro = Alignment(horizontal="center", vertical="center")
+        alineacion_izquierda = Alignment(horizontal="left", vertical="center")
+        borde_delgado = Border(
+            left=Side(style="thin", color="D0D1D3"),
+            right=Side(style="thin", color="D0D1D3"),
+            top=Side(style="thin", color="D0D1D3"),
+            bottom=Side(style="thin", color="D0D1D3")
+        )
+
+        columnas = [
+            "Origen", "Folio", "Cliente", "Líder", "Frente", "Sitio",
+            "Documento", "Estatus", "Estado Archivo", "Enlace Documento", "Fecha Modificación"
+        ]
+
+        anchos_minimos = {
+            "Folio": 18, "Cliente": 35, "Líder": 30, "Frente": 20,
+            "Sitio": 25, "Documento": 40, "Estatus": 15, "Enlace Documento": 18
+        }
+
+        # Set column widths and write headers
+        for nombre_hoja, objeto_hoja in diccionario_hojas.items():
+            for indice, col_nombre in enumerate(columnas, 1):
+                letra_columna = get_column_letter(indice)
+                objeto_hoja.column_dimensions[letra_columna].width = anchos_minimos.get(col_nombre, 15)
+
+            fila_cabecera = []
+            for nombre_columna in columnas:
+                celda = WriteOnlyCell(objeto_hoja, value=nombre_columna)
+                celda.fill = estilo_cabecera
+                celda.font = fuente_cabecera
+                celda.alignment = alineacion_centro
+                celda.border = borde_delgado
+                fila_cabecera.append(celda)
+
+            objeto_hoja.append(fila_cabecera)
+
+        dominio_base = request.build_absolute_uri("/")[:-1]
+
+        # Write data rows
+        for fila_datos in registros:
+            origen_registro = fila_datos.get("Origen", "")
+            hoja_destino = diccionario_hojas.get(origen_registro)
+
+            if not hoja_destino:
+                continue
+
+            fila_excel = []
+
+            for nombre_columna in columnas:
+                valor_bd = fila_datos.get(nombre_columna, "")
+                celda = WriteOnlyCell(hoja_destino, value=valor_bd)
+
+                celda.border = borde_delgado
+                celda.alignment = alineacion_izquierda
+
+                if nombre_columna in ["Origen", "Estado Archivo", "Fecha Modificación"]:
+                    celda.alignment = alineacion_centro
+                    celda.value = valor_bd
+
+                elif nombre_columna == "Enlace Documento":
+                    if valor_bd and len(str(valor_bd).strip()) > 5:
+                        url_completa = valor_bd if valor_bd.startswith("http") else f"{dominio_base}{valor_bd}"
+                        celda.value = "Abrir Archivo"
+                        celda.hyperlink = url_completa
+                        celda.font = fuente_enlace
+                        celda.alignment = alineacion_centro
+                    else:
+                        celda.value = "Sin Archivo"
+                        celda.alignment = alineacion_centro
+                else:
+                    celda.value = valor_bd
+
+                fila_excel.append(celda)
+
+            hoja_destino.append(fila_excel)
+            conteos_hojas[origen_registro] += 1
+
+        # Remove empty sheets
+        if conteos_hojas["PTE"] == 0:
+            libro_trabajo.remove(hoja_pte)
+        if conteos_hojas["OT"] == 0:
+            libro_trabajo.remove(hoja_ot)
+        if conteos_hojas["PROD"] == 0:
+            libro_trabajo.remove(hoja_prod)
+
+        if not libro_trabajo.sheetnames:
+            hoja_vacia = libro_trabajo.create_sheet(title="Sin Datos")
+            celda_vacia = WriteOnlyCell(hoja_vacia, value="No se encontraron registros para tu búsqueda.")
+            hoja_vacia.append([celda_vacia])
+
+        # Save to memory stream
+        flujo_memoria = io.BytesIO()
+        libro_trabajo.save(flujo_memoria)
+        flujo_memoria.seek(0)
+
+        fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
+        nombre_archivo = f"Reporte_SASCOP_BI_{fecha_actual}.xlsx"
+
+        respuesta = FileResponse(
+            flujo_memoria,
+            as_attachment=True,
+            filename=nombre_archivo,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        return respuesta
+
+    except Exception as error_servidor:
+        print("Error crítico al generar Excel masivo:")
+        traceback.print_exc()
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": "Falla al generar el archivo Excel."
+        }, status=500)
+```
+
+## Excel Formatting
+
+### Corporate Styling
+
+<CodeGroup>
+```python Header Style
+estilo_cabecera = PatternFill(
+    start_color="F05523",  # Corporate orange
+    end_color="F05523", 
+    fill_type="solid"
+)
+fuente_cabecera = Font(color="FFFFFF", bold=True)
+```
+
+```python Hyperlink Style
+fuente_enlace = Font(
+    color="0563C1",      # Blue for links
+    underline="single"
+)
+```
+
+```python Border Style
+borde_delgado = Border(
+    left=Side(style="thin", color="D0D1D3"),
+    right=Side(style="thin", color="D0D1D3"),
+    top=Side(style="thin", color="D0D1D3"),
+    bottom=Side(style="thin", color="D0D1D3")
+)
+```
+</CodeGroup>
+
+### Column Configuration
+
+```python
+anchos_minimos = {
+    "Folio": 18,
+    "Cliente": 35,
+    "Líder": 30,
+    "Frente": 20,
+    "Sitio": 25,
+    "Documento": 40,
+    "Estatus": 15,
+    "Enlace Documento": 18
+}
+
+for indice, col_nombre in enumerate(columnas, 1):
+    letra_columna = get_column_letter(indice)
+    objeto_hoja.column_dimensions[letra_columna].width = anchos_minimos.get(col_nombre, 15)
+```
+
+### Hyperlink Generation
+
+```python
+if valor_bd and len(str(valor_bd).strip()) > 5:
+    # Build absolute URL
+    url_completa = valor_bd if valor_bd.startswith("http") else f"{dominio_base}{valor_bd}"
+    
+    celda.value = "Abrir Archivo"  # Display text
+    celda.hyperlink = url_completa  # Actual link
+    celda.font = fuente_enlace
+    celda.alignment = alineacion_centro
+else:
+    celda.value = "Sin Archivo"
+    celda.alignment = alineacion_centro
+```
+
+<Info>
+  **URL Resolution**: Relative paths from database are converted to absolute URLs using `request.build_absolute_uri("/")`.
+</Info>
+
+## Email Report Delivery
+
+### POST /centro_consulta/enviar-correo/
+
+```python operaciones/views/centro_consulta.py
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def fn_api_enviar_correo_bi(request):
+    """
+    Endpoint para procesar filtros, generar el Excel en memoria validando pesos,
+    y enviar el reporte visual por correo electrónico.
+    """
+    try:
+        cuerpo_peticion = json.loads(request.body)
+        cadena_correos = cuerpo_peticion.get("correos", "")
+        filtros_front = cuerpo_peticion.get("filtros", {})
+        graficas_front = cuerpo_peticion.get("graficas", [])
+
+        lista_destinatarios = [correo.strip() for correo in cadena_correos.split(",") if correo.strip()]
+        es_valida_lista = True if len(lista_destinatarios) > 0 else False
+
+        if not es_valida_lista:
+            return JsonResponse({
+                "estatus": "error", 
+                "mensaje": "Correos no válidos."
+            }, status=400)
+
+        origenes = filtros_front.get("origenes", [])
+        subconsulta_dinamica = fn_obtener_subconsulta_origenes(origenes)
+        clausula_where, params = fn_construir_where_dinamico(filtros_front)
+
+        # Check record count
+        sql_conteo = f"SELECT COUNT(*) AS total FROM ({subconsulta_dinamica}) AS T {clausula_where}"
+        resultado_conteo = ejecutar_query_sql(sql_conteo, params)
+        total_registros = resultado_conteo[0]["total"] if resultado_conteo else 0
+
+        tupla_excel = None
+        mensaje_advertencia = ""
+        supera_registros = True if total_registros > 100000 else False
+
+        if supera_registros:
+            mensaje_advertencia = "El volumen de datos supera los 100,000 registros permitidos para envío por correo. Por favor, descarga el Excel masivo directamente desde el sistema."
+        else:
+            # Generate Excel in memory
+            sql_excel = f"""
+                SELECT
+                    T.tipo AS "Origen", T.folio AS "Folio", T.cliente AS "Cliente",
+                    T.lider AS "Líder", T.frente AS "Frente",
+                    CASE
+                        WHEN %(buscar_por_frente)s = '1' THEN T.sitio_oficial
+                        WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_plataforma::text IN %(ids_sitios)s THEN T.sitio_plat_desc
+                        WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_embarcacion::text IN %(ids_sitios)s THEN T.sitio_emb_desc
+                        WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_patio::text IN %(ids_sitios)s THEN T.sitio_pat_desc
+                        ELSE CONCAT_WS(' / ', NULLIF(T.sitio_pat_desc, ''), NULLIF(T.sitio_emb_desc, ''), NULLIF(T.sitio_plat_desc, ''))
+                    END AS "Sitio",
+                    T.documento AS "Documento", T._descripcion_estatus AS "Estatus",
+                    CASE
+                        WHEN T.archivo IS NOT NULL AND LENGTH(TRIM(T.archivo)) > 5 THEN 'ENTREGADO'
+                        WHEN T._fid_estatus_paso = 14 THEN 'NO APLICA'
+                        ELSE 'PENDIENTE'
+                    END AS "Estado Archivo",
+                    T.archivo AS "Enlace Documento", T.fecha AS "Fecha Modificación"
+                FROM ({subconsulta_dinamica}) AS T {clausula_where}
+                ORDER BY T._fecha_sort ASC NULLS LAST;
+            """
+
+            registros_excel = fn_ejecutar_query_sql_lotes(sql_excel, params)
+            libro_trabajo = openpyxl.Workbook(write_only=True)
+            hoja_unica = libro_trabajo.create_sheet(title="Reporte Datos")
+
+            # Simplified single-sheet format for email
+            estilo_cabecera = PatternFill(start_color="F05523", end_color="F05523", fill_type="solid")
+            fuente_cabecera = Font(color="FFFFFF", bold=True)
+            alineacion_centro = Alignment(horizontal="center", vertical="center")
+
+            columnas = ["Origen", "Folio", "Cliente", "Líder", "Frente", "Sitio", "Documento", "Estatus", "Estado Archivo", "Enlace Documento", "Fecha Modificación"]
+
+            fila_cabecera = []
+            for col_nombre in columnas:
+                celda = WriteOnlyCell(hoja_unica, value=col_nombre)
+                celda.fill = estilo_cabecera
+                celda.font = fuente_cabecera
+                celda.alignment = alineacion_centro
+                fila_cabecera.append(celda)
+
+            hoja_unica.append(fila_cabecera)
+
+            for fila_datos in registros_excel:
+                fila_excel = []
+                for col in columnas:
+                    celda = WriteOnlyCell(hoja_unica, value=fila_datos.get(col, ""))
+                    fila_excel.append(celda)
+                hoja_unica.append(fila_excel)
+
+            flujo_memoria = io.BytesIO()
+            libro_trabajo.save(flujo_memoria)
+
+            # Validate file size
+            peso_bytes = flujo_memoria.getbuffer().nbytes
+            peso_mb = peso_bytes / (1024 * 1024)
+            supera_peso = True if peso_mb > 20 else False
+
+            if supera_peso:
+                mensaje_advertencia = f"El archivo Excel generado pesa {peso_mb:.2f} MB, superando el límite de seguridad de 20 MB. Por favor, descárgalo desde el sistema."
+            else:
+                fecha_actual = datetime.now().strftime("%Y%m%d_%H%M")
+                nombre_archivo = f"Reporte_SASCOP_BI_{fecha_actual}.xlsx"
+                tupla_excel = (nombre_archivo, flujo_memoria.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        # Send email with optional attachment
+        envio_exitoso = fn_enviar_correo_reporte_bi(lista_destinatarios, graficas_front, tupla_excel, mensaje_advertencia)
+
+        estatus_respuesta = "ok" if envio_exitoso else "error"
+        mensaje_respuesta = "Reporte enviado exitosamente." if envio_exitoso else "Hubo un error al intentar enviar el correo."
+
+        return JsonResponse({"estatus": estatus_respuesta, "mensaje": mensaje_respuesta})
+
+    except Exception as error_endpoint:
+        traceback.print_exc()
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": "Ocurrió un error interno procesando la solicitud."
+        }, status=500)
+```
+
+### Email Validation Rules
+
+<AccordionGroup>
+  <Accordion title="Record Count Limit" icon="hashtag">
+    **Maximum**: 100,000 records
+    
+    Exceeding this limit returns a warning message instead of generating the file:
+    ```python
+    if total_registros > 100000:
+        mensaje_advertencia = "El volumen de datos supera los 100,000 registros..."
+    ```
+  </Accordion>
+  
+  <Accordion title="File Size Limit" icon="file-zipper">
+    **Maximum**: 20 MB
+    
+    Files exceeding 20MB are not attached to email:
+    ```python
+    peso_mb = peso_bytes / (1024 * 1024)
+    if peso_mb > 20:
+        mensaje_advertencia = f"El archivo Excel generado pesa {peso_mb:.2f} MB..."
+    ```
+  </Accordion>
+  
+  <Accordion title="Email Address Validation" icon="envelope">
+    Multiple recipients separated by commas:
+    ```python
+    lista_destinatarios = [
+        correo.strip() 
+        for correo in cadena_correos.split(",") 
+        if correo.strip()
+    ]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Email Payload Structure
+
+```json
+{
+  "correos": "user1@example.com, user2@example.com",
+  "filtros": {
+    "origenes": ["PTE", "OT"],
+    "clientes_id": ["5"],
+    "fecha_inicio": "2024-01-01",
+    "fecha_fin": "2024-12-31"
+  },
+  "graficas": [
+    {
+      "tipo": "pie",
+      "titulo": "Distribución por Origen",
+      "imagen_base64": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+    },
+    {
+      "tipo": "bar",
+      "titulo": "Rendimiento por Líder",
+      "imagen_base64": "data:image/png;base64,iVBORw0KGgoAAAANS..."
+    }
+  ]
+}
+```
+
+<Info>
+  **Chart Images**: Frontend can send base64-encoded chart images to be embedded in the email body alongside the Excel attachment.
+</Info>
+
+## Memory Efficiency
+
+### Write-Only Mode
+
+```python
+# Use write_only=True for large datasets
+libro_trabajo = openpyxl.Workbook(write_only=True)
+hoja = libro_trabajo.create_sheet(title="Reporte")
+
+# Rows are written immediately to disk, not held in memory
+for fila_datos in registros:  # Potentially millions of rows
+    fila_excel = []
+    for columna in columnas:
+        celda = WriteOnlyCell(hoja, value=fila_datos.get(columna, ""))
+        fila_excel.append(celda)
+    hoja.append(fila_excel)  # Written immediately
+```
+
+<Tip>
+  **Write-Only Workbooks**: Use `write_only=True` when generating large exports. Rows are streamed to disk instead of being held in memory, enabling exports of millions of records.
+</Tip>
+
+### Batch SQL Execution
+
+```python core/utils.py (reference)
+def fn_ejecutar_query_sql_lotes(sql, params):
+    """
+    Execute SQL in batches for large result sets.
+    Yields rows incrementally to avoid loading entire dataset into memory.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(sql, params)
+        columns = [col[0] for col in cursor.description]
+        
+        while True:
+            rows = cursor.fetchmany(size=1000)  # Fetch 1000 rows at a time
+            if not rows:
+                break
+            for row in rows:
+                yield dict(zip(columns, row))
+```
+
+## Sheet Organization
+
+### Multi-Sheet Structure
+
+Download endpoint creates separate sheets by origin:
+
+- **Reporte PTE**: All PTE records
+- **Reporte OT**: All OT records  
+- **Reporte PROD**: All production records
+
+Empty sheets are automatically removed:
+
+```python
+if conteos_hojas["PTE"] == 0:
+    libro_trabajo.remove(hoja_pte)
+if conteos_hojas["OT"] == 0:
+    libro_trabajo.remove(hoja_ot)
+if conteos_hojas["PROD"] == 0:
+    libro_trabajo.remove(hoja_prod)
+```
+
+### Single-Sheet Structure
+
+Email endpoint uses simplified single-sheet format:
+
+- **Reporte Datos**: All records in one sheet
+
+This reduces file size for email delivery.
+
+## Error Handling
+
+<CodeGroup>
+```python Database Errors
+try:
+    registros = fn_ejecutar_query_sql_lotes(sql_excel, params)
+except Exception as error_sql:
+    return JsonResponse({
+        "estatus": "error",
+        "mensaje": "Error al consultar la base de datos."
+    }, status=500)
+```
+
+```python Excel Generation Errors
+try:
+    libro_trabajo.save(flujo_memoria)
+except Exception as error_excel:
+    traceback.print_exc()
+    return JsonResponse({
+        "estatus": "error",
+        "mensaje": "Falla al generar el archivo Excel."
+    }, status=500)
+```
+
+```python Email Delivery Errors
+envio_exitoso = fn_enviar_correo_reporte_bi(
+    lista_destinatarios, 
+    graficas_front, 
+    tupla_excel, 
+    mensaje_advertencia
+)
+
+if not envio_exitoso:
+    return JsonResponse({
+        "estatus": "error",
+        "mensaje": "Hubo un error al intentar enviar el correo."
+    })
+```
+</CodeGroup>
+
+## Usage Examples
+
+### Download Excel
+
+```javascript
+fetch('/centro_consulta/descargar-excel/', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-CSRFToken': getCookie('csrftoken')
+  },
+  body: JSON.stringify({
+    filtros: {
+      origenes: ['PTE', 'OT'],
+      clientes_id: ['5'],
+      fecha_inicio: '2024-01-01',
+      fecha_fin: '2024-12-31'
+    }
+  })
+})
+.then(response => response.blob())
+.then(blob => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'reporte.xlsx';
+  a.click();
+});
+```
+
+### Send Email Report
+
+```javascript
+fetch('/centro_consulta/enviar-correo/', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-CSRFToken': getCookie('csrftoken')
+  },
+  body: JSON.stringify({
+    correos: 'user1@example.com, user2@example.com',
+    filtros: {
+      origenes: ['OT'],
+      lideres_id: ['3'],
+      fecha_inicio: '2024-01-01',
+      fecha_fin: '2024-03-31'
+    },
+    graficas: [
+      {
+        tipo: 'pie',
+        titulo: 'Distribución por Origen',
+        imagen_base64: chartCanvas.toDataURL()
+      }
+    ]
+  })
+})
+.then(response => response.json())
+.then(data => {
+  if (data.estatus === 'ok') {
+    alert('Reporte enviado exitosamente');
+  } else {
+    alert('Error: ' + data.mensaje);
+  }
+});
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Filter Before Export">
+    Apply specific filters to reduce export size:
+    ```json
+    {
+      "filtros": {
+        "fecha_inicio": "2024-01-01",
+        "fecha_fin": "2024-01-31",  // One month only
+        "clientes_id": ["5"]         // Specific client
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Monitor File Size">
+    Warn users before generating large files:
+    ```javascript
+    if (estimatedRows > 50000) {
+      if (!confirm('This export may be large. Continue?')) {
+        return;
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Email vs. Download">
+    Guide users:
+    - **Email**: Small reports (under 20MB, under 100k records) with charts
+    - **Download**: Large exports without record limits
+  </Step>
+  
+  <Step title="Validate Recipients">
+    Validate email addresses client-side before submission:
+    ```javascript
+    const emails = input.split(',').map(e => e.trim());
+    const valid = emails.every(e => /^\S+@\S+\.\S+$/.test(e));
+    ```
+  </Step>
+</Steps>
+
+## Performance Considerations
+
+<Warning>
+  **Large Exports**: Exports exceeding 500,000 records may take several minutes. Consider implementing:
+  - Background job processing (Celery)
+  - Progress indicators
+  - Result caching
+  - Pagination or date-based chunking
+</Warning>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Global Search" icon="magnifying-glass" href="/features/centro-consulta/global-search">
+    Filter data before export
+  </Card>
+  <Card title="Dashboards" icon="chart-line" href="/features/centro-consulta/dashboards">
+    Generate charts for email reports
+  </Card>
+  <Card title="Query Center Overview" icon="chart-mixed" href="/features/centro-consulta/overview">
+    Architecture and data sources
+  </Card>
+</CardGroup>

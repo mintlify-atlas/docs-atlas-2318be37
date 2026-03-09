@@ -1,0 +1,313 @@
+---
+title: 'Catalogs & Configuration Overview'
+description: 'Master data management system for projects, clients, sites, and operational parameters'
+icon: 'database'
+---
+
+## Introduction
+
+The Catalogs & Configuration module provides centralized management of all master data used throughout the SASCOP BME SubTec system. This module ensures data consistency and provides the foundation for operational workflows.
+
+## Key Catalog Types
+
+<CardGroup cols={2}>
+  <Card title="Products & Concepts" icon="box" href="/features/catalogs/products">
+    Manage ordinary and extraordinary work concepts with pricing and units
+  </Card>
+  <Card title="Sites & Fronts" icon="location-dot" href="/features/catalogs/sites-fronts">
+    Configure work locations, fronts, and operational sites
+  </Card>
+  <Card title="Clients & Responsibles" icon="users" href="/features/catalogs/clients-responsibles">
+    Manage client information and project leaders
+  </Card>
+  <Card title="Status & Types" icon="tags" href="/features/catalogs/status-types">
+    Define workflow status and classification types
+  </Card>
+</CardGroup>
+
+## Architecture
+
+### Database Models
+
+All catalog models are defined in `catalogos_models.py` with consistent structure:
+
+```python operaciones/models/catalogos_models.py
+class Sitio(models.Model):
+    descripcion = models.CharField(max_length=100)
+    activo = models.BooleanField(default=True)
+    id_frente = models.ForeignKey(Frente, on_delete=models.CASCADE, blank=True, null=True)
+    comentario = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'sitio'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+### Common Fields
+
+All catalog models share these standard fields:
+
+<AccordionGroup>
+  <Accordion title="descripcion" icon="text">
+    Primary descriptive field for the catalog item (50-200 characters)
+  </Accordion>
+  <Accordion title="activo" icon="toggle-on">
+    Boolean flag for soft deletion (default: True). Inactive records are filtered from operations.
+  </Accordion>
+  <Accordion title="comentario" icon="comment">
+    Optional text field for additional notes and documentation
+  </Accordion>
+</AccordionGroup>
+
+## API Patterns
+
+### Standard CRUD Operations
+
+Each catalog follows a consistent API pattern:
+
+<CodeGroup>
+```python List (DataTable)
+def datatable_sitios(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    sitios = Sitio.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+        frente_descripcion=F('id_frente__descripcion')
+    ).order_by('id')
+    
+    if search_value:
+        sitios = sitios.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value)
+        )
+    
+    total_records = sitios.count()
+    sitios = sitios[start:start + length]
+    
+    data = []
+    for sitio in sitios:
+        data.append({
+            'id': sitio.id,
+            'descripcion': sitio.descripcion,
+            'activo': sitio.estado_texto,
+            'activo_bool': sitio.activo,
+            'frente': sitio.frente_descripcion,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+```python Create
+@require_http_methods(["POST"])
+def crear_sitio(request):
+    try:
+        descripcion = request.POST.get('descripcion')
+        comentario = request.POST.get('comentario', '')
+        id_frente = request.POST.get('id_frente')
+        activo = True
+        
+        sitio = Sitio.objects.create(
+            descripcion=descripcion,
+            comentario=comentario,
+            id_frente_id=id_frente,
+            activo=activo
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio creada correctamente',
+            'id': sitio.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear sitio: {str(e)}'
+        })
+```
+
+```python Update
+@require_http_methods(["POST"])
+def editar_sitio(request):
+    try:
+        sitio_id = request.POST.get('id')
+        descripcion = request.POST.get('descripcion')
+        comentario = request.POST.get('comentario', '')
+        id_frente = request.POST.get('id_frente')
+        
+        sitio = Sitio.objects.get(id=sitio_id)
+        sitio.descripcion = descripcion
+        sitio.comentario = comentario
+        sitio.id_frente_id = id_frente
+        sitio.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio actualizada correctamente',
+            'exito': True
+        })
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Sitio no encontrada',
+            'exito': False
+        })
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al actualizar sitio: {str(e)}',
+            'exito': False
+        })
+```
+
+```python Delete (Soft)
+@require_http_methods(["POST"])
+def eliminar_sitio(request):
+    try:
+        sitio_id = request.POST.get('sitio_id')
+        
+        if not sitio_id:
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'ID de sitio no proporcionado',
+                'exito': False
+            })
+
+        sitio = Sitio.objects.get(id=sitio_id)
+        sitio.activo = False
+        sitio.save()
+
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Sitio desactivada correctamente',
+            'exito': True
+        })
+
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Sitio no encontrada',
+            'exito': False
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al desactivar sitio: {str(e)}',
+            'exito': False
+        })
+```
+</CodeGroup>
+
+## URL Configuration
+
+Catalog endpoints follow RESTful conventions:
+
+```python operaciones/urls.py
+# URLs for Sites
+path('catalogos/sitios/', catalogos.lista_sitios, name='lista_sitios'),
+path('catalogos/datatable_sitios/', catalogos.datatable_sitios, name='datatable_sitios'),
+path('catalogos/sitios/crear/', catalogos.crear_sitio, name='crear_sitio'),
+path('catalogos/sitios/eliminar/', catalogos.eliminar_sitio, name='eliminar_sitio'),
+path('catalogos/sitios/obtener/', catalogos.obtener_sitio, name='obtener_sitio'),
+path('catalogos/sitios/editar/', catalogos.editar_sitio, name='editar_sitio'),
+```
+
+<Info>
+  **Soft Delete Pattern**: All catalogs use soft deletion (`activo=False`) to maintain referential integrity and historical data.
+</Info>
+
+## Best Practices
+
+<Steps>
+  <Step title="Data Validation">
+    Always validate required fields before creation:
+    ```python
+    if not id_partida:
+        return JsonResponse({
+            'exito': False, 
+            'tipo_aviso': 'error', 
+            'detalles': 'El ID de partida es obligatorio'
+        })
+    ```
+  </Step>
+  
+  <Step title="Foreign Key Handling">
+    Use `select_related()` and `prefetch_related()` for efficient queries:
+    ```python
+    productos = Producto.objects.filter(activo=1).select_related(
+        'id_sitio', 'id_tipo_partida', 'id_unidad_medida'
+    )
+    ```
+  </Step>
+  
+  <Step title="Search Optimization">
+    Implement case-insensitive search across relevant fields:
+    ```python
+    if search_value:
+        tipos = tipos.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(nivel_afectacion__icontains=search_value)
+        )
+    ```
+  </Step>
+  
+  <Step title="Annotation for Display">
+    Use Django's `annotate()` to prepare display-ready data:
+    ```python
+    .annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        )
+    )
+    ```
+  </Step>
+</Steps>
+
+## Security & Permissions
+
+<Warning>
+  Catalog modifications require proper authentication and permissions:
+  ```python
+  @login_required(login_url='/accounts/login/')
+  def lista_tipos(request):
+      # Only authenticated users can access catalogs
+      ...
+  ```
+</Warning>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Products Catalog" icon="box" href="/features/catalogs/products">
+    Detailed product and concept management
+  </Card>
+  <Card title="Sites Configuration" icon="map" href="/features/catalogs/sites-fronts">
+    Site and front configuration guide
+  </Card>
+  <Card title="Client Management" icon="building" href="/features/catalogs/clients-responsibles">
+    Client and responsible party setup
+  </Card>
+  <Card title="Status Definitions" icon="list-check" href="/features/catalogs/status-types">
+    Status and type configuration
+  </Card>
+</CardGroup>

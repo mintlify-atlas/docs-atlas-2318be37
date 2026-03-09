@@ -1,0 +1,587 @@
+---
+title: Schedule Tracking
+description: Import and track Microsoft Project schedules with real vs client progress reporting
+icon: gantt
+---
+
+## Overview
+
+Schedule Tracking provides integration with Microsoft Project (.mpp) files, allowing teams to maintain "double truth" tracking: real progress for internal management and client-reported progress for contractual milestones.
+
+<Info>
+  The system imports the full task hierarchy from MS Project including WBS, dependencies, resources, and baseline dates.
+</Info>
+
+## Data Model Structure
+
+### CronogramaVersion Model
+
+Represents a "snapshot" of an imported .mpp file.
+
+<CodeGroup>
+```python produccion_models.py:165-178
+class CronogramaVersion(models.Model):
+    """
+    La 'foto' del archivo .mpp importado.
+    """
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, related_name='cronogramas')
+    nombre_version = models.CharField(max_length=150)
+    archivo_mpp = models.FileField(upload_to='operaciones/mpps/')
+    fecha_carga = models.DateTimeField(auto_now_add=True)
+    es_activo = models.BooleanField(default=True)
+    fecha_inicio_proyecto = models.DateField(null=True, blank=True)
+    fecha_fin_proyecto = models.DateField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'importacion_cronograma'
+```
+</CodeGroup>
+
+<ParamField path="id_ot" type="ForeignKey(OTE)" required>
+  Parent work order for this schedule
+</ParamField>
+
+<ParamField path="nombre_version" type="CharField(150)" required>
+  Version name (e.g., "Baseline", "Rev 01", "As-Built")
+</ParamField>
+
+<ParamField path="archivo_mpp" type="FileField">
+  Uploaded .mpp file stored in `operaciones/mpps/`
+</ParamField>
+
+<ParamField path="es_activo" type="BooleanField" default="True">
+  Marks the current active version for progress tracking
+  
+  **Note:** Only one version per OT should be active at a time
+</ParamField>
+
+<ParamField path="fecha_inicio_proyecto" type="DateField">
+  Project start date extracted from MS Project
+</ParamField>
+
+<ParamField path="fecha_fin_proyecto" type="DateField">
+  Project completion date extracted from MS Project
+</ParamField>
+
+### TareaCronograma Model
+
+Represents individual tasks from the MS Project breakdown.
+
+<CodeGroup>
+```python produccion_models.py:180-201
+class TareaCronograma(models.Model):
+    """
+    Desglose de tareas del Project.
+    """
+    version = models.ForeignKey(CronogramaVersion, on_delete=models.CASCADE, related_name='tareas')
+    uid_project = models.IntegerField()  # Unique ID from MS Project
+    id_project = models.IntegerField()   # Sequential ID from MS Project
+    wbs = models.CharField(max_length=50)  # Work Breakdown Structure code
+    nombre = models.CharField(max_length=500)
+    nivel_esquema = models.IntegerField(default=0)  # Indentation level
+    es_resumen = models.BooleanField(default=False)  # Summary/rollup task
+    padre_uid = models.IntegerField(null=True, blank=True)  # Parent task UID
+    fecha_inicio = models.DateField(null=True)
+    fecha_fin = models.DateField(null=True)
+    duracion_dias = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    porcentaje_mpp = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # % from MPP
+    porcentaje_completado = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    recursos = models.TextField(blank=True, default='')  # Comma-separated resource names
+
+    class Meta:
+        db_table = 'importacion_cronograma_tarea'
+        indexes = [models.Index(fields=['version', 'uid_project'])]
+```
+</CodeGroup>
+
+<Tip>
+  **Key Fields for Hierarchy:**
+  - `uid_project`: MS Project's unique task identifier
+  - `padre_uid`: Links to parent task's `uid_project`
+  - `nivel_esquema`: Indentation level (0 = top level, 1 = first indent, etc.)
+  - `es_resumen`: True for rollup/summary tasks that contain subtasks
+</Tip>
+
+### AvanceCronograma Model
+
+Separate table for "double truth" progress tracking.
+
+<CodeGroup>
+```python produccion_models.py:203-215
+class AvanceCronograma(models.Model):
+    """
+    La doble verdad: Real vs Cliente.
+    Se separa de la tarea para no sobreescribir al re-importar versiones.
+    """
+    tarea = models.OneToOneField(TareaCronograma, on_delete=models.CASCADE, related_name='avance')
+    porcentaje_real = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    porcentaje_cliente = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    comentario = models.TextField(blank=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'importacion_cronograma_avance'
+```
+</CodeGroup>
+
+<Warning>
+  **Why Separate Table?**
+  
+  Progress data is stored separately from task definitions to prevent overwriting real/client percentages when re-importing updated .mpp files. This preserves the "double truth" even through schedule revisions.
+</Warning>
+
+### DependenciaTarea Model
+
+Tracks task dependencies (predecessors/successors).
+
+<CodeGroup>
+```python produccion_models.py:217-233
+class DependenciaTarea(models.Model):
+    """
+    Relaciones de precedencia entre tareas del cronograma.
+    """
+    version = models.ForeignKey(CronogramaVersion, on_delete=models.CASCADE, related_name='dependencias')
+    tarea_predecesora_uid = models.IntegerField()
+    tarea_sucesora_uid = models.IntegerField()
+    tipo = models.CharField(max_length=2, default='FS', choices=[
+        ('FS', 'Fin a Inicio'),      # Finish-to-Start
+        ('SS', 'Inicio a Inicio'),   # Start-to-Start
+        ('FF', 'Fin a Fin'),         # Finish-to-Finish
+        ('SF', 'Inicio a Fin'),      # Start-to-Finish
+    ])
+    lag_dias = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+
+    class Meta:
+        db_table = 'importacion_cronograma_dependencia'
+```
+</CodeGroup>
+
+<Info>
+  **Dependency Types:**
+  - **FS (Finish-to-Start)**: Most common - Task B starts when Task A finishes
+  - **SS (Start-to-Start)**: Task B starts when Task A starts
+  - **FF (Finish-to-Finish)**: Task B finishes when Task A finishes
+  - **SF (Start-to-Finish)**: Rare - Task B finishes when Task A starts
+  
+  **Lag:** Positive values = delay, negative values = lead time
+</Info>
+
+## Loading Schedule Tree
+
+The system provides an endpoint to retrieve tasks in hierarchical tree format for visualization.
+
+<CodeGroup>
+```python produccion.py:1253-1301
+@login_required
+@require_http_methods(["GET"])
+def obtener_arbol_mpp(request):
+    """
+    Obtiene las tareas del cronograma vigente de una OT y las formatea
+    en una estructura jerárquica (_children) para TOAST UI Tree Grid.
+    """
+    try:
+        ot_id = request.GET.get('ot_id')
+        version_activa = CronogramaVersion.objects.get(id_ot_id=ot_id, es_activo=True)
+        
+        tareas = TareaCronograma.objects.filter(version=version_activa).order_by('id_project')
+
+        # Build task dictionary
+        tareas_dict = {}
+        for t in tareas:
+            tareas_dict[t.uid_project] = {
+                "wbs": t.wbs,
+                "nombre": t.nombre,
+                "fecha_inicio": t.fecha_inicio.strftime("%d/%m/%Y") if t.fecha_inicio else "",
+                "fecha_fin": t.fecha_fin.strftime("%d/%m/%Y") if t.fecha_fin else "",
+                "duracion_dias": float(t.duracion_dias),
+                "porcentaje_mpp": float(t.porcentaje_mpp),
+                "recursos": t.recursos,
+                "uid_project": t.uid_project,
+                "padre_uid": t.padre_uid,
+                "_attributes": {"expanded": True}  # Auto-expand in tree view
+            }
+
+        # Build hierarchical tree
+        tree_data = []
+        for uid, tarea in tareas_dict.items():
+            padre_uid = tarea["padre_uid"]
+            
+            if padre_uid is not None and padre_uid in tareas_dict:
+                # Add as child to parent
+                padre = tareas_dict[padre_uid]
+                if "_children" not in padre:
+                    padre["_children"] = []
+                padre["_children"].append(tarea)
+            else:
+                # Top-level task
+                tree_data.append(tarea)
+
+        return JsonResponse({"estatus": "ok", "data": tree_data})
+
+    except CronogramaVersion.DoesNotExist:
+        return JsonResponse({"estatus": "error", "mensaje": "No hay cronograma activo"})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({"estatus": "error", "mensaje": str(e)}, status=500)
+```
+</CodeGroup>
+
+<Tip>
+  The `_children` key is used by TOAST UI Tree Grid and similar components to render hierarchical task breakdowns with expand/collapse functionality.
+</Tip>
+
+## Import Workflow
+
+<Steps>
+  <Step title="Upload .mpp File">
+    User uploads Microsoft Project file through the import interface
+    
+    **Endpoint:** `/ot/importar-mpp/` (from urls.py:52)
+  </Step>
+  
+  <Step title="Parse MS Project Data">
+    Backend parses .mpp file using python library (e.g., mpxj or win32com)
+    
+    **Extracted Data:**
+    - Project metadata (start/end dates)
+    - Task hierarchy (WBS, names, dates)
+    - Dependencies (predecessors/successors)
+    - Resource assignments
+    - Baseline percentages
+  </Step>
+  
+  <Step title="Create Version Record">
+    CronogramaVersion record created with `es_activo=True`
+    
+    Previous active version (if any) set to `es_activo=False`
+  </Step>
+  
+  <Step title="Bulk Insert Tasks">
+    TareaCronograma records bulk-created for all tasks
+    
+    **Performance:** Use `bulk_create()` for large schedules (1000+ tasks)
+  </Step>
+  
+  <Step title="Bulk Insert Dependencies">
+    DependenciaTarea records created for all task links
+  </Step>
+  
+  <Step title="Preserve Progress Data">
+    Existing AvanceCronograma records matched by WBS code and preserved
+    
+    **Logic:** New tasks get default 0% real/client progress
+  </Step>
+</Steps>
+
+## Double Truth Tracking
+
+The system maintains two progress percentages for each task:
+
+<Tabs>
+  <Tab title="Real Progress (Internal)">
+    **Used For:**
+    - Internal project management
+    - Resource planning
+    - Risk assessment
+    - Accurate ETC (Estimate to Complete)
+    
+    **Updated By:** Project manager based on actual field conditions
+    
+    **Typically:** More conservative than client-reported progress
+  </Tab>
+  
+  <Tab title="Client Progress (Contractual)">
+    **Used For:**
+    - Progress billing
+    - Milestone payments
+    - Client reporting
+    - Contractual compliance
+    
+    **Updated By:** Project manager in coordination with client
+    
+    **Typically:** Matches contractual milestone definitions
+  </Tab>
+</Tabs>
+
+<Warning>
+  Never automatically synchronize real and client progress. They serve different purposes and must be independently maintained.
+</Warning>
+
+## Schedule Visualization
+
+The schedule tree grid typically displays:
+
+<CardGroup cols={2}>
+  <Card title="Task Hierarchy" icon="sitemap">
+    - WBS code
+    - Task name (indented by level)
+    - Summary task indicators
+  </Card>
+  <Card title="Schedule Data" icon="calendar">
+    - Start date
+    - Finish date
+    - Duration (days)
+    - Float/slack time
+  </Card>
+  <Card title="Progress Tracking" icon="percent">
+    - Baseline % (from .mpp)
+    - Real % (internal)
+    - Client % (contractual)
+    - Variance indicators
+  </Card>
+  <Card title="Resource Info" icon="users">
+    - Assigned resources
+    - Work hours
+    - Cost allocations
+  </Card>
+</CardGroup>
+
+## Critical Path Analysis
+
+While not explicitly in the current codebase, dependencies enable critical path calculation:
+
+```python
+# Example: Finding tasks on critical path
+from django.db.models import Q
+
+# Tasks with zero float and FS dependencies
+critical_tasks = TareaCronograma.objects.filter(
+    version__es_activo=True,
+    version__id_ot_id=ot_id
+).annotate(
+    # Calculate total float (would require complex query)
+    # Float = Late Start - Early Start
+).filter(
+    # total_float <= 0  # Critical path tasks
+)
+```
+
+<Info>
+  Consider implementing critical path calculation as a separate management command or cached computation for large schedules.
+</Info>
+
+## Version Management
+
+### Activating a Schedule Version
+
+```python
+# Activate a specific version
+from django.db import transaction
+
+with transaction.atomic():
+    # Deactivate all versions for this OT
+    CronogramaVersion.objects.filter(id_ot_id=ot_id).update(es_activo=False)
+    
+    # Activate target version
+    target_version = CronogramaVersion.objects.get(id=version_id)
+    target_version.es_activo = True
+    target_version.save()
+```
+
+<Warning>
+  Always use atomic transactions when changing active versions to prevent race conditions.
+</Warning>
+
+### Comparing Versions
+
+```python
+# Compare task dates between versions
+baseline = CronogramaVersion.objects.get(id_ot_id=ot_id, nombre_version='Baseline')
+current = CronogramaVersion.objects.get(id_ot_id=ot_id, es_activo=True)
+
+for task in baseline.tareas.all():
+    try:
+        current_task = current.tareas.get(wbs=task.wbs)
+        
+        if task.fecha_fin != current_task.fecha_fin:
+            print(f"Task {task.wbs} slipped from {task.fecha_fin} to {current_task.fecha_fin}")
+    except TareaCronograma.DoesNotExist:
+        print(f"Task {task.wbs} removed in current version")
+```
+
+## Resource Loading
+
+Resources are stored as comma-separated text in the `recursos` field:
+
+```python
+# Parse resources from task
+task = TareaCronograma.objects.get(uid_project=123)
+resource_list = [r.strip() for r in task.recursos.split(',') if r.strip()]
+
+print(f"Task {task.nombre} assigned to: {', '.join(resource_list)}")
+
+# Find all tasks for a specific resource
+resource_name = "John Smith"
+tasks_for_resource = TareaCronograma.objects.filter(
+    version__es_activo=True,
+    recursos__icontains=resource_name
+)
+```
+
+<Tip>
+  For advanced resource management (loading, leveling, costing), consider normalizing resources into a separate table with many-to-many relationship.
+</Tip>
+
+## API Endpoint Reference
+
+<AccordionGroup>
+  <Accordion title="GET /produccion/obtener_arbol_mpp/" icon="code">
+    Returns hierarchical task tree for active schedule version.
+    
+    **Query Parameters:**
+    ```yaml
+    ot_id: integer (required) - Work order ID
+    ```
+    
+    **Response Structure:**
+    ```json
+    {
+      "estatus": "ok",
+      "data": [
+        {
+          "wbs": "1",
+          "nombre": "Phase 1: Mobilization",
+          "fecha_inicio": "01/03/2025",
+          "fecha_fin": "15/03/2025",
+          "duracion_dias": 10.0,
+          "porcentaje_mpp": 100.0,
+          "recursos": "Project Manager, Logistics",
+          "uid_project": 1,
+          "padre_uid": null,
+          "_attributes": {"expanded": true},
+          "_children": [
+            {
+              "wbs": "1.1",
+              "nombre": "Equipment Transport",
+              "fecha_inicio": "01/03/2025",
+              "fecha_fin": "05/03/2025",
+              "duracion_dias": 4.0,
+              "porcentaje_mpp": 100.0,
+              "recursos": "Logistics",
+              "uid_project": 2,
+              "padre_uid": 1,
+              "_attributes": {"expanded": true}
+            }
+          ]
+        }
+      ]
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="POST /ot/importar-mpp/" icon="code">
+    Imports a new schedule version from .mpp file.
+    
+    **Request:** Multipart form data
+    ```yaml
+    id_ot: integer - Work order ID
+    nombre_version: string - Version name (e.g., "Rev 02")
+    archivo_mpp: file - MS Project .mpp file
+    ```
+    
+    **Response:**
+    ```json
+    {
+      "exito": true,
+      "mensaje": "Cronograma importado correctamente",
+      "version_id": 15,
+      "tareas_importadas": 247
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+<Steps>
+  <Step title="Consistent WBS Codes">
+    Maintain stable WBS codes across versions to preserve progress history
+    
+    **Example:** Don't change "1.2.3" to "1.3.2" - use same code even if task moves
+  </Step>
+  
+  <Step title="Baseline Early">
+    Create "Baseline" version at project start before any work begins
+    
+    **Purpose:** Enables schedule variance analysis throughout project
+  </Step>
+  
+  <Step title="Regular Progress Updates">
+    Update real and client progress weekly (at minimum)
+    
+    **Frequency:** More critical during intense work phases
+  </Step>
+  
+  <Step title="Document Variance">
+    Use `comentario` field in AvanceCronograma to explain significant differences between real and client progress
+  </Step>
+  
+  <Step title="Archive Old Versions">
+    Keep historical versions (`es_activo=False`) for audit trails and claims defense
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Import Fails: File Format Error">
+    **Cause:** .mpp file is corrupted or uses unsupported MS Project version.
+    
+    **Solution:**
+    1. Open in Microsoft Project and Save As → Project 2010-2016 format
+    2. Verify file isn't password-protected
+    3. Check file size (very large projects may timeout)
+  </Accordion>
+  
+  <Accordion title="Tree Not Displaying Correctly">
+    **Cause:** Parent-child relationships broken (orphaned `padre_uid` values).
+    
+    **Solution:**
+    ```sql
+    -- Find orphaned tasks
+    SELECT uid_project, padre_uid, nombre
+    FROM importacion_cronograma_tarea t1
+    WHERE padre_uid IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM importacion_cronograma_tarea t2
+        WHERE t2.uid_project = t1.padre_uid
+        AND t2.version_id = t1.version_id
+      );
+    ```
+    Set orphaned tasks' `padre_uid` to NULL.
+  </Accordion>
+  
+  <Accordion title="Progress Data Lost After Reimport">
+    **Cause:** WBS codes changed between versions.
+    
+    **Solution:** Maintain stable WBS codes, or implement migration script to match by task name:
+    ```python
+    # Match progress by task name as fallback
+    old_avance = AvanceCronograma.objects.get(
+        tarea__wbs='1.2.3',
+        tarea__version__nombre_version='Rev 01'
+    )
+    new_tarea = TareaCronograma.objects.get(
+        nombre=old_avance.tarea.nombre,
+        version__nombre_version='Rev 02'
+    )
+    AvanceCronograma.objects.create(
+        tarea=new_tarea,
+        porcentaje_real=old_avance.porcentaje_real,
+        porcentaje_cliente=old_avance.porcentaje_cliente
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Production Overview" icon="chart-line" href="/features/production/overview">
+    Return to production tracking overview
+  </Card>
+  <Card title="Work Orders" icon="clipboard-list" href="/features/ote/overview">
+    Learn about work order management
+  </Card>
+</CardGroup>

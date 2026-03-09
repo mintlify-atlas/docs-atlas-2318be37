@@ -1,0 +1,579 @@
+---
+title: 'Status & Types Configuration'
+description: 'Define workflow status, process types, and classification hierarchies'
+icon: 'tags'
+---
+
+## Overview
+
+The Status & Types catalog provides classification and state management for all operational workflows, including:
+
+- **Estatus**: Workflow status indicators for PTEs, OTs, and billing
+- **Tipo**: Classification types for items, affectation levels, and work categories
+- **Categories & Classifications**: Technical hierarchy for concept organization
+
+## Data Models
+
+### Estatus (Status)
+
+```python operaciones/models/catalogos_models.py
+class Estatus(models.Model):
+    TIPO_AFECTACION = [
+        ('1', 'PTE'),
+        ('2', 'OT'),
+        ('3', 'COBRO'),
+        ('4', 'PASOS PTE'),
+    ]
+    
+    descripcion = models.CharField(max_length=100)
+    nivel_afectacion = models.IntegerField(choices=TIPO_AFECTACION, default=0)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_estatus'
+
+    def __str__(self):
+        return self.descripcion
+```
+
+### Tipo (Type)
+
+```python operaciones/models/catalogos_models.py
+class Tipo(models.Model):
+    TIPO_CHOICES = [
+        ('1', 'PTE'),
+        ('2', 'OT'),
+        ('3', 'PARTIDA'),
+        ('4', 'PRODUCCION')
+    ]
+    
+    descripcion = models.CharField(max_length=200)
+    nivel_afectacion = models.IntegerField(choices=TIPO_CHOICES, default=0)
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'tipo'
+
+    def __str__(self):
+        return f"{self.descripcion} ({self.nivel_afectacion})"
+```
+
+## Status (Estatus) Management
+
+### Affectation Levels
+
+Status records use `nivel_afectacion` to indicate their scope:
+
+<Tabs>
+  <Tab title="PTE (1)">
+    Status values for PTE (Technical-Economic Proposal) workflows
+  </Tab>
+  <Tab title="OT (2)">
+    Status values for OT (Work Order) workflows
+  </Tab>
+  <Tab title="COBRO (3)">
+    Status values for billing and collection processes
+  </Tab>
+  <Tab title="PASOS PTE (4)">
+    Status values for individual PTE steps
+  </Tab>
+</Tabs>
+
+### Listing Status
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_cobro(request):
+    """Lista de todas los estados"""
+    return render(request, 'operaciones/catalogos/estado_cobro/lista_estatus.html')
+```
+
+### DataTable API
+
+```python operaciones/views/catalogos.py
+def datatable_cobro(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    tipos = Estatus.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+        afectacion_texto=Case(
+            When(nivel_afectacion=1, then=Value('PTE')),
+            When(nivel_afectacion=2, then=Value('OT')),
+            When(nivel_afectacion=3, then=Value('Cobro')),
+            When(nivel_afectacion=4, then=Value('Pasos PTE')),
+            default=Value('No definido'),
+            output_field=CharField()
+        )
+    )
+    
+    if search_value:
+        tipos = tipos.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value)
+        )
+    
+    total_records = tipos.count()
+    tipos = tipos[start:start + length]
+    
+    data = []
+    for tipo in tipos:
+        data.append({
+            'id': tipo.id,
+            'descripcion': tipo.descripcion,
+            'activo': tipo.estado_texto,
+            'activo_bool': tipo.activo,
+            'nivel_afectacion': tipo.nivel_afectacion,
+            'afectacion_texto': tipo.afectacion_texto,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+### Creating Status
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_estatus(request):
+    try:
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        activo = True
+        
+        estatus = Estatus.objects.create(
+            descripcion=descripcion,
+            nivel_afectacion=afectacion,
+            comentario=comentario,
+            activo=activo
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Estatus creado correctamente',
+            'id': estatus.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear estatus: {str(e)}'
+        })
+```
+
+### Updating Status
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def editar_estatus(request):
+    try:
+        id = request.POST.get('id')
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        
+        estatus = Estatus.objects.get(id=id)
+        estatus.descripcion = descripcion
+        estatus.nivel_afectacion = afectacion
+        estatus.comentario = comentario
+        estatus.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Estatus actualizada correctamente',
+            'exito': True
+        })
+    except Sitio.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Estatus no encontrada',
+            'exito': False
+        })
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al actualizar el estatus: {str(e)}',
+            'exito': False
+        })
+```
+
+### Query Center Integration
+
+```python operaciones/views/centro_consulta.py
+@login_required
+def fn_obtener_estatus_afectacion_uno(request):
+    """Get status with affectation level 1 (PTE) for filtering"""
+    try:
+        estatus_listado = Estatus.objects.filter(nivel_afectacion=1, activo=True)
+        if not estatus_listado.exists():
+            return JsonResponse({
+                "tipo_aviso": "error",
+                "detalles": "No se encontraron estatus con nivel de afectacion uno"
+            }, status=404)
+        
+        data = [
+            {
+                "id": f.id,
+                "descripcion": f.descripcion,
+                "nivel_afectacion": f.nivel_afectacion,
+                "comentario": f.comentario,
+                "activo": f.activo
+            } for f in estatus_listado
+        ]
+        return JsonResponse(data, safe=False)
+    except Exception as error_proceso:
+        return JsonResponse({
+            "tipo_aviso": "error", 
+            "detalles": f"Error en el servidor: {str(error_proceso)}"
+        }, status=500)
+```
+
+## Type (Tipo) Management
+
+### Listing Types
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_tipos(request):
+    """Lista de todos los tipos y afectaciones"""
+    return render(request, 'operaciones/catalogos/tipos/lista_tipos.html')
+```
+
+### DataTable with Annotations
+
+```python operaciones/views/catalogos.py
+def datatable_tipos(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    tipos = Tipo.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+        nivel_texto=Case(
+            When(nivel_afectacion=1, then=Value('PTE')),
+            When(nivel_afectacion=2, then=Value('OT')),
+            When(nivel_afectacion=3, then=Value('Partida')),
+            When(nivel_afectacion=4, then=Value('Produccion')),
+            When(nivel_afectacion=5, then=Value('Clientes')),
+            default=Value('No definido'),
+            output_field=CharField()
+        )
+    ).order_by('nivel_afectacion')
+    
+    if search_value:
+        tipos = tipos.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value) |
+            Q(nivel_afectacion__icontains=search_value)
+        )
+    
+    total_records = tipos.count()
+    tipos = tipos[start:start + length]
+    
+    data = []
+    for tipo in tipos:
+        data.append({
+            'id': tipo.id,
+            'descripcion': tipo.descripcion,
+            'nivel_afectacion': tipo.nivel_texto,
+            'activo': tipo.estado_texto,
+            'activo_bool': tipo.activo,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+### Creating Types
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_tipos(request):
+    try:
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        activo = True
+        
+        tipo = Tipo.objects.create(
+            descripcion=descripcion,
+            nivel_afectacion=afectacion,
+            comentario=comentario,
+            activo=activo
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Tipo creado correctamente',
+            'id': tipo.id
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear tipo: {str(e)}'
+        })
+```
+
+### Updating Types with Permission Check
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def editar_tipos(request):
+    try:
+        if not request.user.has_perm('operaciones.change_tipo'):
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'No tienes permisos para editar',
+                'exito': False
+            })
+        
+        id = request.POST.get('id')
+        descripcion = request.POST.get('descripcion')
+        afectacion = request.POST.get('afectacion')
+        comentario = request.POST.get('comentario', '')
+        
+        tipo = Tipo.objects.get(id=id)
+        tipo.descripcion = descripcion
+        tipo.nivel_afectacion = afectacion
+        tipo.comentario = comentario
+        tipo.save()
+        
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'Tipo actualizada correctamente',
+            'exito': True
+        })
+    except Tipo.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Tipo no encontrada',
+            'exito': False
+        })
+    except Exception as e:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': f'Error al actualizar el tipo: {str(e)}',
+            'exito': False
+        })
+```
+
+<Info>
+  **Permission-Based Editing**: Type modifications require the `operaciones.change_tipo` permission for security.
+</Info>
+
+## Technical Categories
+
+### Category Hierarchy
+
+```python operaciones/models/catalogos_models.py
+class Categoria(models.Model):
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_categoria'
+        verbose_name = 'Categoría Técnica'
+
+    def __str__(self):
+        return f"{self.clave} - {self.descripcion}"
+
+
+class SubCategoria(models.Model):
+    categoria = models.ForeignKey(Categoria, on_delete=models.CASCADE, related_name='subcategorias', null=True, blank=True)
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_subcategoria'
+        unique_together = ['categoria', 'clave']
+
+    def __str__(self):
+        return f"{self.categoria.clave}.{self.clave} - {self.descripcion}"
+
+
+class Clasificacion(models.Model):
+    subcategoria = models.ForeignKey(SubCategoria, on_delete=models.CASCADE, related_name='clasificaciones', null=True, blank=True)
+    clave = models.CharField(max_length=20, null=True, blank=True)
+    descripcion = models.CharField(max_length=600, null=True, blank=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'cat_clasificacion'
+        unique_together = ['subcategoria', 'clave']
+
+    def __str__(self):
+        return f"{self.subcategoria.clave}.{self.clave} - {self.descripcion}"
+```
+
+<AccordionGroup>
+  <Accordion title="Category Hierarchy" icon="diagram-project">
+    The three-level hierarchy provides granular technical classification:
+    
+    1. **Categoria**: Top-level technical category (e.g., "01 - CIVIL")
+    2. **SubCategoria**: Mid-level subcategory (e.g., "01.01 - CONCRETE")
+    3. **Clasificacion**: Detailed classification (e.g., "01.01.001 - FOUNDATION")
+    
+    Unique constraints ensure no duplicate keys within each parent level.
+  </Accordion>
+</AccordionGroup>
+
+## URL Configuration
+
+```python operaciones/urls.py
+# URLs for Status
+path('catalogos/estatus/', catalogos.lista_cobro, name='lista_estatus'),
+path('catalogos/datatable_estcobro/', catalogos.datatable_cobro, name='datatable_cobro'),
+path('catalogos/estatus/crear/', catalogos.crear_estatus, name='crear_estatus'),
+path('catalogos/estatus/eliminar/', catalogos.eliminar_estatus, name='eliminar_estatus'),
+path('catalogos/estatus/obtener/', catalogos.obtener_estatus, name='obtener_estatus'),
+path('catalogos/estatus/editar/', catalogos.editar_estatus, name='editar_estatus'),
+
+# URLs for Types
+path('catalogos/tipos/', catalogos.lista_tipos, name='lista_tipos'),
+path('catalogos/tipos/datatable_tipos/', catalogos.datatable_tipos, name='datatable_tipos'),
+path('catalogos/tipos/crear/', catalogos.crear_tipos, name='crear_tipos'),
+path('catalogos/tipos/eliminar/', catalogos.eliminar_tipos, name='eliminar_tipos'),
+path('catalogos/tipos/obtener/', catalogos.obtener_tipos, name='obtener_tipos'),
+path('catalogos/tipos/editar/', catalogos.editar_tipos, name='editar_tipos'),
+
+# Query Center Status API
+path('catalogos/estatus/obtener_nivel_afectacion_uno/', centro_consulta.fn_obtener_estatus_afectacion_uno, name='obtener_estatus_afectacion_uno'),
+```
+
+## Status in Query Center Filters
+
+Status values are used to filter operational data:
+
+```python operaciones/views/centro_consulta.py
+def fn_construir_where_dinamico(filtros):
+    lista_estatus = filtros.get("estatus_proceso_id", [])
+    
+    condiciones = []
+    params = {}
+    
+    if lista_estatus:
+        condiciones.append("T._fid_estatus_paso::text IN %(ids_estatus)s")
+        params["ids_estatus"] = tuple(lista_estatus)
+    
+    # ... additional filter construction
+    
+    return clausula_where, params
+```
+
+## Dashboard Status Aggregation
+
+```python operaciones/views/centro_consulta.py
+def fn_agrupar_datos_dashboard(registros_db, modo_sitio_libre=False):
+    estatus_embudo = {}
+    
+    for fila in registros_db:
+        descripcion_estatus = fila.get("_descripcion_estatus")
+        texto_estatus = descripcion_estatus if descripcion_estatus else "ESTATUS DESCONOCIDO"
+        
+        llave_estatus = texto_estatus
+        estatus_embudo[llave_estatus] = estatus_embudo.get(llave_estatus, 0) + 1
+    
+    datos_procesados = {
+        "embudo_estatus": [
+            {"estatus": llave, "total": valor} 
+            for llave, valor in estatus_embudo.items()
+        ],
+        # ... other metrics
+    }
+    
+    return datos_procesados
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Status Naming">
+    Use clear, descriptive status names that reflect workflow states:
+    - Good: "EN REVISION", "APROBADO", "RECHAZADO"
+    - Avoid: "STATUS 1", "TEMP", "TEST"
+  </Step>
+  
+  <Step title="Affectation Levels">
+    Set appropriate `nivel_afectacion` to ensure status appears in correct contexts:
+    ```python
+    # PTE-specific status
+    estatus = Estatus.objects.create(
+        descripcion="PROPUESTA ENVIADA",
+        nivel_afectacion=1,  # PTE level
+        activo=True
+    )
+    ```
+  </Step>
+  
+  <Step title="Type Constraints">
+    Use `limit_choices_to` on ForeignKey fields:
+    ```python
+    id_tipo_partida = models.ForeignKey(
+        Tipo, 
+        on_delete=models.CASCADE, 
+        limit_choices_to={'nivel_afectacion': 3}  # Only PARTIDA types
+    )
+    ```
+  </Step>
+  
+  <Step title="Hierarchical Validation">
+    Validate category hierarchy before creation:
+    ```python
+    if Clasificacion.objects.filter(
+        subcategoria=subcategoria, 
+        clave=clave
+    ).exists():
+        raise ValidationError('Clave duplicada en esta subcategoría')
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  **Critical Status IDs**: Status ID 14 ("NO APLICA") has special handling in dashboards and exports. Do not modify or delete this record.
+</Warning>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Catalogs Overview" icon="database" href="/features/catalogs/overview">
+    Return to catalog management overview
+  </Card>
+  <Card title="Query Center Filters" icon="filter" href="/features/centro-consulta/global-search">
+    Learn about status filtering
+  </Card>
+  <Card title="Dashboard Metrics" icon="chart-pie" href="/features/centro-consulta/dashboards">
+    See status aggregations
+  </Card>
+  <Card title="Products Catalog" icon="box" href="/features/catalogs/products">
+    Type usage in concepts
+  </Card>
+</CardGroup>

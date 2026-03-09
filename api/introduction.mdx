@@ -1,0 +1,109 @@
+---
+title: 'Introduction'
+description: 'Welcome to the SASCOP BME SubTec API documentation'
+icon: 'book-open'
+---
+
+## Overview
+
+The SASCOP BME SubTec API provides programmatic access to manage subsea technical operations, including PTEs (Technical Execution Projects), OTEs (Work Orders), production tracking, and catalog management.
+
+## Base URL
+
+<CodeGroup>
+```bash Production
+https://api.sascop-bme-subtec.com
+```
+
+```bash Development
+http://localhost:8000
+```
+</CodeGroup>
+
+## API Architecture
+
+The API is built on Django REST Framework and follows RESTful principles:
+
+- **Authentication**: Session-based authentication with CSRF protection
+- **Response Format**: JSON
+- **HTTP Methods**: GET, POST, PUT, DELETE
+- **Pagination**: Cursor-based pagination for list endpoints
+
+## Getting Started
+
+1. [Authenticate your requests](/api/authentication)
+2. Explore the available endpoints:
+   - [PTE API](/api/pte) - Technical Execution Projects
+   - [OTE API](/api/ote) - Work Orders
+   - [Production API](/api/production) - Production tracking
+   - [Statistics API](/api/statistics) - Dashboard statistics
+   - [Catalogs API](/api/catalogs) - Master data management
+
+## API Endpoints
+
+All API endpoints are prefixed with `/operaciones/api/`:
+
+```
+/operaciones/api/estadisticas/
+/operaciones/api/ptes/
+/operaciones/api/ptes/{pte_id}/
+```
+
+## Response Format
+
+All API responses follow a consistent JSON structure:
+
+<ResponseExample>
+```json Success Response
+{
+  "total_ptes": 45,
+  "total_otes": 128,
+  "total_produccion": 1543,
+  "volumen_total": 25678.50
+}
+```
+
+```json Error Response
+{
+  "error": "Authentication required",
+  "detail": "Please login to access this endpoint",
+  "status": 401
+}
+```
+</ResponseExample>
+
+## Rate Limiting
+
+Currently, there are no rate limits enforced on API endpoints. However, best practices recommend:
+
+- Maximum 100 requests per minute per user
+- Implement exponential backoff for retries
+- Cache responses when appropriate
+
+## Support
+
+For API support and questions:
+
+- Technical issues: Create an issue in the project repository
+- Feature requests: Contact the development team
+- Documentation feedback: Submit through the docs portal
+
+## Configuration
+
+The API is configured through Django settings:
+
+```python settings.py
+# Database Configuration
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+        'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+        'PORT': os.environ.get('RDS_PORT', '5432'),
+    }
+}
+
+# Session Settings
+SESSION_COOKIE_AGE = 7200  # 2 hours
+SESSION_SAVE_EVERY_REQUEST = True
+```

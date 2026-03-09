@@ -1,0 +1,319 @@
+---
+title: Database Configuration
+description: Understanding and configuring PostgreSQL database settings in SASCOP BME SubTec
+---
+
+## Overview
+
+SASCOP BME SubTec uses **PostgreSQL** as its primary database. The application supports both local development and production configurations through environment variables.
+
+## Database Configuration
+
+The database configuration is defined in `bme_subtec/settings.py:82-94`:
+
+```python bme_subtec/settings.py
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('RDS_DB_NAME', 'postgres'),
+        'USER': os.environ.get('RDS_USERNAME', 'postgres'),
+        'PASSWORD': os.environ.get('RDS_PASSWORD', ''),
+        'HOST': os.environ.get('RDS_HOSTNAME', 'localhost'),
+        'PORT': os.environ.get('RDS_PORT', '5432'),
+        'OPTIONS': {
+            'sslmode': 'require',
+        }
+    }
+}
+```
+
+<Note>
+The configuration uses environment variables with sensible defaults for local development.
+</Note>
+
+## Environment Variables
+
+Configure these environment variables in your `.env` file:
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `RDS_DB_NAME` | Database name | `postgres` | Yes |
+| `RDS_USERNAME` | Database user | `postgres` | Yes |
+| `RDS_PASSWORD` | Database password | Empty string | Yes |
+| `RDS_HOSTNAME` | Database host | `localhost` | Yes |
+| `RDS_PORT` | Database port | `5432` | No |
+
+## Local Development Setup
+
+<Steps>
+  <Step title="Create Local Database">
+    For local development, create a PostgreSQL database:
+    
+    ```bash
+    createdb sascop_local
+    ```
+    
+    Or using psql:
+    
+    ```sql
+    CREATE DATABASE sascop_local;
+    CREATE USER sascop_user WITH PASSWORD 'your_password';
+    GRANT ALL PRIVILEGES ON DATABASE sascop_local TO sascop_user;
+    ```
+  </Step>
+
+  <Step title="Configure Environment">
+    Create a `.env` file with local database settings:
+    
+    ```bash .env
+    RDS_DB_NAME=sascop_local
+    RDS_USERNAME=postgres
+    RDS_PASSWORD=root
+    RDS_HOSTNAME=localhost
+    RDS_PORT=5432
+    ```
+  </Step>
+
+  <Step title="Apply Migrations">
+    Run Django migrations to create all necessary tables:
+    
+    ```bash
+    python manage.py migrate
+    ```
+    
+    This will create tables for all installed apps:
+    - `operaciones` - Core operations management
+    - `core` - Module system and utilities
+    - `costa_fuera` - Offshore operations (if enabled)
+    - `reportes` - Reporting system (if enabled)
+  </Step>
+</Steps>
+
+## Alternative Local Configuration
+
+The codebase includes a commented-out alternative for pure local development in `bme_subtec/settings.py:97-106`:
+
+```python bme_subtec/settings.py
+# Uncomment for local development without environment variables
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': 'sascop_local',       
+#         'USER': 'postgres',           
+#         'PASSWORD': 'root',    
+#         'HOST': 'localhost',         
+#         'PORT': '5433',
+#     }
+# }
+```
+
+<Warning>
+This hardcoded configuration is only suitable for local development. Never use it in production.
+</Warning>
+
+## Production Configuration
+
+For production deployments (AWS RDS, Vercel Postgres, etc.):
+
+<Steps>
+  <Step title="SSL Connection">
+    The production configuration requires SSL connections:
+    
+    ```python
+    'OPTIONS': {
+        'sslmode': 'require',
+    }
+    ```
+    
+    Ensure your database provider supports SSL connections.
+  </Step>
+
+  <Step title="Set Production Variables">
+    Configure production environment variables in your hosting platform:
+    
+    ```bash
+    RDS_DB_NAME=production_db
+    RDS_USERNAME=production_user
+    RDS_PASSWORD=strong_secure_password
+    RDS_HOSTNAME=your-db-instance.region.rds.amazonaws.com
+    RDS_PORT=5432
+    ```
+  </Step>
+
+  <Step title="Run Migrations">
+    After deploying, run migrations on the production database:
+    
+    ```bash
+    python manage.py migrate --settings=bme_subtec.settings
+    ```
+  </Step>
+</Steps>
+
+## Database Models
+
+The application uses several model categories:
+
+### Core Models
+
+**Module System** (`core/models.py:4-17`):
+
+```python core/models.py
+class Modulo(models.Model):
+    """Sistema de módulos"""
+    app_name = models.CharField(max_length=50, unique=True)
+    nombre = models.CharField(max_length=100)
+    descripcion = models.TextField()
+    activo = models.BooleanField(default=True)
+    orden = models.IntegerField(default=0)
+    icono = models.CharField(max_length=50, default='apps')
+    
+    class Meta:
+        db_table = 'core_modulo'
+```
+
+### Operations Models
+
+The `operaciones` app contains several model files:
+
+- **catalogos_models.py** - Catalog entities (Tipo, Frente, Estatus, Sitio, etc.)
+- **pte_models.py** - PTE (Project Task Entry) management
+- **ote_models.py** - OTE (Work Order) management
+- **produccion_models.py** - Production tracking and estimations
+- **registro_actividad_models.py** - Activity logging
+
+See [Data Models](/development/data-models) for detailed information.
+
+## Database Maintenance
+
+### Creating Migrations
+
+When you modify models, create new migrations:
+
+```bash
+python manage.py makemigrations
+```
+
+For a specific app:
+
+```bash
+python manage.py makemigrations operaciones
+```
+
+### Viewing Migration Status
+
+Check which migrations have been applied:
+
+```bash
+python manage.py showmigrations
+```
+
+### Rolling Back Migrations
+
+To revert to a specific migration:
+
+```bash
+python manage.py migrate operaciones 0001
+```
+
+### Database Shell
+
+Access the database shell for direct queries:
+
+```bash
+python manage.py dbshell
+```
+
+## Connection Pooling
+
+<Note>
+For high-traffic production environments, consider implementing connection pooling using `django-db-connection-pool` or pgBouncer.
+</Note>
+
+## Backup and Restore
+
+### Backup Database
+
+```bash
+pg_dump -h localhost -U postgres sascop_local > backup.sql
+```
+
+### Restore Database
+
+```bash
+psql -h localhost -U postgres sascop_local < backup.sql
+```
+
+### Django Fixtures
+
+Export data as JSON fixtures:
+
+```bash
+python manage.py dumpdata operaciones > operaciones_data.json
+```
+
+Load fixtures:
+
+```bash
+python manage.py loaddata operaciones_data.json
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+If you see "connection refused" errors:
+
+1. Verify PostgreSQL is running:
+   ```bash
+   sudo systemctl status postgresql
+   ```
+
+2. Check if PostgreSQL is listening on the correct port:
+   ```bash
+   sudo netstat -plntu | grep postgres
+   ```
+
+3. Verify `pg_hba.conf` allows connections from your IP
+
+### SSL Connection Issues
+
+For SSL-related errors in production:
+
+1. Download the RDS certificate bundle (for AWS)
+2. Configure SSL certificate path in database settings
+3. Verify SSL is enabled on your database instance
+
+### Performance Issues
+
+1. **Enable query logging** to identify slow queries:
+   ```python
+   LOGGING = {
+       'version': 1,
+       'handlers': {
+           'console': {
+               'class': 'logging.StreamHandler',
+           },
+       },
+       'loggers': {
+           'django.db.backends': {
+               'handlers': ['console'],
+               'level': 'DEBUG',
+           },
+       },
+   }
+   ```
+
+2. **Create database indexes** for frequently queried fields
+3. **Use select_related() and prefetch_related()** to optimize queries
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Models" icon="diagram-project" href="/development/data-models">
+    Explore the complete data model structure
+  </Card>
+  
+  <Card title="Database Migrations" icon="database" href="/development/deployment/database-migrations">
+    Learn about managing migrations in production
+  </Card>
+</CardGroup>

@@ -1,0 +1,419 @@
+---
+title: "PTE Status Tracking"
+description: "Comprehensive guide to tracking and managing PTE statuses, including status transitions and dashboard statistics"
+icon: "signal"
+---
+
+## Overview
+
+PTE status tracking operates at two levels: **PTE-level status** (the overall project) and **step-level status** (individual workflow tasks). This guide focuses on PTE-level status management.
+
+## PTE Status Choices
+
+The `PTEHeader` model defines four primary statuses:
+
+```python
+ESTATUS_CHOICES = [
+    (1, 'Activo'),
+    (2, 'En Proceso'),
+    (3, 'Terminado'),
+    (4, 'Cancelado'),
+]
+```
+
+<AccordionGroup>
+  <Accordion title="1 - Activo" icon="circle-play">
+    **Initial Status**: The PTE has been created and is ready to begin work.
+    
+    - PTE has been approved and initialized
+    - Workflow steps have been generated
+    - No active work has started yet
+    - Can transition to: En Proceso, Cancelado
+  </Accordion>
+  
+  <Accordion title="2 - En Proceso" icon="spinner">
+    **Active Work**: Work is actively being performed on the PTE.
+    
+    - One or more steps are in progress
+    - Team members are actively working
+    - Progress is being tracked
+    - Can transition to: Terminado, Cancelado, Suspendido (9)
+  </Accordion>
+  
+  <Accordion title="3 - Terminado" icon="check-circle">
+    **Completed**: All work has been completed and the PTE is ready for OT generation.
+    
+    - All required steps are completed
+    - `fecha_entrega` is automatically set
+    - PTE is ready to create an OT (Orden de Trabajo)
+    - This is a terminal state for successful PTEs
+  </Accordion>
+  
+  <Accordion title="4 - Cancelado" icon="circle-xmark">
+    **Cancelled**: The PTE has been cancelled and will not proceed.
+    
+    - Work has been stopped
+    - No OT will be generated
+    - PTE is archived
+    - This is a terminal state
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+There's also an undocumented status `9 - SUSPENDIDA` visible in the datatable annotation, indicating suspended PTEs.
+</Note>
+
+## Changing PTE Status
+
+The `cambiar_estatus_pte` function handles PTE-level status updates:
+
+**URL:** `/pte/cambiar_estatus_pte/`  
+**Method:** `POST`  
+**Authentication:** Required  
+**Activity Logging:** Enabled
+
+### Parameters
+
+<ParamField path="pte_id" type="integer" required>
+  ID of the PTE to update
+</ParamField>
+
+<ParamField path="nuevo_estatus" type="integer" required>
+  New status value (1, 2, 3, 4, or 9)
+</ParamField>
+
+<ParamField path="comentario" type="string">
+  Optional comment explaining the status change
+</ParamField>
+
+<ParamField path="fecha_entrega" type="date">
+  Optional delivery date (auto-set to now if not provided when status=3)
+</ParamField>
+
+### Implementation
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def cambiar_estatus_pte(request):
+    """Cambiar estatus de una PTE"""
+    try:
+        pte_id = request.POST.get('pte_id')
+        nuevo_estatus = request.POST.get('nuevo_estatus')
+        comentario = request.POST.get('comentario', '')
+        fecha_entrega = request.POST.get('fecha_entrega', None)
+        
+        if not pte_id or not nuevo_estatus:
+            return JsonResponse({
+                'exito': False,
+                'detalles': 'Datos incompletos'
+            })
+        
+        pte = PTEHeader.objects.get(id=pte_id)
+
+        estatus_anterior = pte.estatus
+
+        pte.estatus = nuevo_estatus
+        pte.comentario = comentario
+        
+        # Auto-set delivery date when marking as Terminado
+        if int(nuevo_estatus) == 3 and estatus_anterior != 3:
+            if fecha_entrega:
+                pte.fecha_entrega = fecha_entrega
+            else:
+                pte.fecha_entrega = timezone.now()        
+        elif estatus_anterior == 3 and int(nuevo_estatus) != 3:
+            # Clear delivery date if changing from Terminado
+            pte.fecha_entrega = None
+        
+        pte.save()
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Estatus de la PTE actualizado correctamente'
+        })
+        
+    except PTEHeader.DoesNotExist:
+        return JsonResponse({
+            'exito': False,
+            'detalles': 'PTE no encontrada'
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'detalles': f'Error al cambiar estatus: {str(e)}'
+        })
+```
+
+<Warning>
+**Important Date Logic**: When transitioning TO "Terminado" (3), the `fecha_entrega` is automatically set. When changing FROM "Terminado" to another status, the date is **cleared**. This ensures data integrity.
+</Warning>
+
+## Dashboard Statistics
+
+The main index view provides PTE statistics by status:
+
+**URL:** `/` (root)  
+**View Function:** `pte.index`
+
+```python
+@login_required(login_url='/accounts/login/')
+def index(request):
+    """Página principal del sistema"""
+    total_ptes = PTEHeader.objects.filter(estatus__in=[1,2,3,4]).count()
+    total_otes = OTE.objects.count()
+    total_produccion = Produccion.objects.count()
+    
+    ptes_activo = PTEHeader.objects.filter(estatus=1).count()
+    ptes_en_proceso = PTEHeader.objects.filter(estatus=2).count()
+    ptes_terminado = PTEHeader.objects.filter(estatus=3).count()
+    ptes_cancelado = PTEHeader.objects.filter(estatus=4).count()
+    
+    context = {
+        'total_ptes': total_ptes,
+        'total_otes': total_otes,
+        'total_produccion': total_produccion,
+        'ptes_activo': ptes_activo,
+        'ptes_en_proceso': ptes_en_proceso,
+        'ptes_terminado': ptes_terminado,
+        'ptes_cancelado': ptes_cancelado,
+    }
+    return render(request, 'operaciones/index.html', context)
+```
+
+<Info>
+The total count excludes logically deleted PTEs (status=0) by explicitly filtering for statuses 1-4.
+</Info>
+
+## Status Display in DataTables
+
+The `datatable_ptes` function annotates PTEs with human-readable status text:
+
+```python
+ptes = PTEHeader.objects.filter(estatus__gt=0).select_related('id_tipo').annotate(
+    estatus_texto=Case(
+        When(estatus=1, then=Value('PENDIENTE')),
+        When(estatus=2, then=Value('PROCESO')),
+        When(estatus=3, then=Value('ENTREGADA')),
+        When(estatus=4, then=Value('CANCELADA')),
+        When(estatus=9, then=Value('SUSPENDIDA')),
+        default=Value('DESCONOCIDO'),
+        output_field=CharField()
+    )
+).order_by(order_field)
+```
+
+<Note>
+Notice the slight naming differences:
+- Model: "Activo" → DataTable: "PENDIENTE"
+- Model: "Terminado" → DataTable: "ENTREGADA"
+
+This provides more user-friendly status labels in the UI.
+</Note>
+
+## Filtering by Status
+
+The DataTables endpoint supports filtering by status:
+
+```python
+filtro_estatus = request.GET.get('estatus', '')
+if filtro_estatus:
+    ptes = ptes.filter(estatus=filtro_estatus)
+```
+
+**Example Query:**
+```
+GET /pte/datatable/?estatus=2&start=0&length=10
+```
+
+This would return only PTEs with status "En Proceso" (2).
+
+## Additional Filters
+
+Beyond status, the DataTables endpoint supports multiple filters:
+
+| Parameter | Description | Example |
+|-----------|-------------|----------|
+| `estatus` | Filter by status ID | `?estatus=2` |
+| `tipo[]` | Filter by PTE type (multi) | `?tipo[]=1&tipo[]=3` |
+| `responsable_proyecto` | Filter by project manager | `?responsable_proyecto=5` |
+| `anio` | Filter by year in oficio | `?anio=2024` |
+| `cliente` | Filter by client | `?cliente=3` |
+| `filtro` | General search text | `?filtro=instalacion` |
+
+### Year Filtering Logic
+
+The year filter uses regex to extract the year from the `oficio_pte` field:
+
+```python
+if filtro_anio:
+    ptes_con_anio_en_oficio = ptes.filter(oficio_pte__regex=r'.*-(\d{4})$')
+    
+    ptes_con_anio = ptes_con_anio_en_oficio.filter(
+        oficio_pte__endswith=f"-{filtro_anio}"
+    )
+    ptes = ptes_con_anio
+```
+
+<Tip>
+This assumes oficio numbers follow the format `PREFIX-YYYY` (e.g., `PTE-2024-001-2024`).
+</Tip>
+
+## Progress Integration
+
+While status indicates the overall state, progress shows completion percentage:
+
+```python
+for pte in ptes:
+    detalles = PTEDetalle.objects.filter(id_pte_header_id=pte.id)
+    total_pasos = detalles.count()
+    pasos_completados = detalles.filter(estatus_paso__in=[3,14]).count() 
+    
+    progreso = 0
+    if total_pasos > 0:
+        progreso = (pasos_completados / total_pasos) * 100 
+    
+    data.append({
+        'id': pte.id,
+        'estatus': pte.estatus,
+        'estatus_texto': pte.estatus_texto,
+        'progreso': round(progreso),
+        'pasos_completados': pasos_completados,
+        'total_pasos': total_pasos
+    })
+```
+
+<Info>
+A PTE can have status "En Proceso" (2) with 85% progress, or status "Terminado" (3) with 100% progress. The two metrics are complementary.
+</Info>
+
+## Logical Deletion
+
+The system uses **logical deletion** rather than physical deletion:
+
+```python
+@require_http_methods(["POST"])
+@login_required
+@registrar_actividad
+def eliminar_pte(request):
+    """Eliminación lógica de PTE"""
+    try:
+        if not request.user.has_perm('operaciones.delete_pteheader'):
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'No tienes permiso para eliminar PTEs',
+                'exito': False
+            })
+        
+        pte_id = request.POST.get('id')
+        pte = PTEHeader.objects.get(id=pte_id)
+        pte.estatus = 0  # Mark as deleted
+        pte.save()
+
+        return JsonResponse({
+            'tipo_aviso': 'exito',
+            'detalles': 'PTE eliminado correctamente',
+            'exito': True
+        })
+```
+
+<Warning>
+**Permission Check**: Users must have the `operaciones.delete_pteheader` permission to delete PTEs. The system enforces this with Django's built-in permission system.
+</Warning>
+
+## OT Creation Validation
+
+When creating an OT from a PTE, the system validates completion status:
+
+```python
+def crear_ot_desde_pte(request):
+    pte = PTEHeader.objects.get(id=pte_id)
+    detalles_pte = PTEDetalle.objects.filter(id_pte_header_id=pte.id)
+    total_pasos = detalles_pte.count()
+    pasos_completados = detalles_pte.filter(estatus_paso_id__in=[3, 4, 14]).count()
+    
+    progreso = (pasos_completados / total_pasos) * 100 if total_pasos > 0 else 0
+    
+    if progreso < 100:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'advertencia',
+            'detalles': 'La PTE debe estar 100% completada para crear una OT'
+        })
+```
+
+<Info>
+The PTE must have **100% step completion** (all steps with status 3, 4, or 14) to generate an OT, regardless of the PTE's own status field.
+</Info>
+
+## Response Examples
+
+### Success Response
+
+```json
+{
+  "exito": true,
+  "tipo_aviso": "exito",
+  "detalles": "Estatus de la PTE actualizado correctamente"
+}
+```
+
+### Error Responses
+
+```json
+{
+  "exito": false,
+  "detalles": "Datos incompletos"
+}
+```
+
+```json
+{
+  "exito": false,
+  "detalles": "PTE no encontrada"
+}
+```
+
+## API Endpoints Summary
+
+| Endpoint | Method | Purpose |
+|----------|--------|----------|
+| `/pte/cambiar_estatus_pte/` | POST | Change PTE status |
+| `/pte/datatable/` | GET | Get filtered PTE list |
+| `/pte/obtener_datos/` | GET | Get PTE details for editing |
+| `/pte/eliminar/` | POST | Logical deletion (status=0) |
+| `/` | GET | Dashboard with status counts |
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Always Validate Progress" icon="circle-check">
+    Before marking a PTE as "Terminado", verify that all workflow steps are completed
+  </Card>
+  
+  <Card title="Use Logical Deletion" icon="trash-can">
+    Never physically delete PTEs; use status=0 for historical data preservation
+  </Card>
+  
+  <Card title="Track Status Changes" icon="clock-rotate-left">
+    The `@registrar_actividad` decorator logs all status changes for audit trails
+  </Card>
+  
+  <Card title="Enforce Permissions" icon="lock">
+    Always check user permissions before allowing status changes or deletions
+  </Card>
+</CardGroup>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Workflow Steps" icon="list-check" href="/features/pte/workflow-steps">
+    Learn about step-level status management
+  </Card>
+  
+  <Card title="Creating PTEs" icon="plus" href="/features/pte/creating-pte">
+    Understand PTE initialization and defaults
+  </Card>
+</CardGroup>

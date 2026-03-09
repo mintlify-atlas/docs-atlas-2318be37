@@ -1,0 +1,556 @@
+---
+title: 'Products & Concepts Catalog'
+description: 'Manage work concepts, pricing, and extraordinary items (PUEs)'
+icon: 'box'
+---
+
+## Overview
+
+The Products & Concepts catalog manages all billable work items in the system, divided into:
+
+- **Ordinary Concepts (Conceptos Ordinarios)**: Standard contracted work items with fixed pricing
+- **Extraordinary Concepts (Conceptos Extraordinarios/PUEs)**: Special work items requiring authorization
+
+## Data Model
+
+### ConceptoMaestro
+
+The primary model for all work concepts:
+
+```python operaciones/models/catalogos_models.py
+class ConceptoMaestro(models.Model):
+    sub_anexo = models.ForeignKey(SubAnexo, on_delete=models.CASCADE, related_name='conceptos', null=True, blank=True)
+    partida_ordinaria = models.CharField(max_length=50, null=True, blank=True)
+    codigo_interno = models.CharField(max_length=50, blank=True, null=True)
+    descripcion = models.TextField()
+    unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.PROTECT)
+    cantidad = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    precio_unitario_mn = models.DecimalField(max_digits=18, decimal_places=2, default=0, null=True, blank=True)
+    precio_unitario_usd = models.DecimalField(max_digits=18, decimal_places=2, default=0, null=True, blank=True)
+    id_tipo_partida = models.ForeignKey(Tipo, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 3})
+    categoria = models.TextField(null=True, blank=True)
+    subcategoria = models.TextField(null=True, blank=True)
+    clasificacion = models.TextField(null=True, blank=True)
+
+    # Extraordinary item fields
+    partida_extraordinaria = models.CharField(max_length=50, null=True, blank=True)
+    pte_creacion = models.CharField(max_length=100, null=True, blank=True)
+    ot_creacion = models.CharField(max_length=100, null=True, blank=True)
+    fecha_autorizacion = models.DateField(null=True, blank=True)
+    estatus = models.CharField(max_length=20, blank=True, null=True)
+
+    comentario = models.TextField(blank=True, null=True)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = 'contrato_concepto_maestro'
+        indexes = [
+            models.Index(fields=['partida_ordinaria']),
+            models.Index(fields=['sub_anexo']),
+        ]
+
+    def __str__(self):
+        return f"{self.partida_ordinaria} ({self.sub_anexo.clave_anexo})"
+```
+
+### Related Models
+
+<AccordionGroup>
+  <Accordion title="UnidadMedida (Unit of Measure)" icon="ruler">
+    ```python
+    class UnidadMedida(models.Model):
+        descripcion = models.CharField(max_length=50)
+        clave = models.CharField(max_length=10)  # e.g., "M2", "KG", "PZA"
+        activo = models.BooleanField(default=True)
+        comentario = models.TextField(blank=True, null=True)
+        
+        class Meta:
+            db_table = 'unidad_medida'
+    ```
+  </Accordion>
+  
+  <Accordion title="SubAnexo (Contract Annex)" icon="file-contract">
+    ```python
+    class SubAnexo(models.Model):
+        anexo_maestro = models.ForeignKey(AnexoContrato, on_delete=models.CASCADE, related_name='sub_anexos')
+        clave_anexo = models.CharField(max_length=50)
+        descripcion = models.TextField()
+        unidad_medida = models.ForeignKey(UnidadMedida, on_delete=models.CASCADE, null=True, blank=True)
+        cantidad = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+        precio_unitario_mn = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+        precio_unitario_usd = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+        activo = models.BooleanField(default=True)
+        
+        class Meta:
+            db_table = 'contrato_sub_anexo'
+            ordering = ['clave_anexo']
+            unique_together = ['anexo_maestro', 'clave_anexo']
+    ```
+  </Accordion>
+  
+  <Accordion title="Tipo (Item Type)" icon="tag">
+    ```python
+    class Tipo(models.Model):
+        TIPO_CHOICES = [
+            ('1', 'PTE'),
+            ('2', 'OT'),
+            ('3', 'PARTIDA'),
+            ('4', 'PRODUCCION')
+        ]
+        
+        descripcion = models.CharField(max_length=200)
+        nivel_afectacion = models.IntegerField(choices=TIPO_CHOICES, default=0)
+        comentario = models.TextField(blank=True, null=True)
+        activo = models.BooleanField(default=True)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Ordinary Concepts
+
+### Listing Ordinary Concepts
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_conceptos_ordinarios(request):
+    """Renderiza la página de Conceptos Ordinarios"""
+    context = {
+        'titulo': 'Catálogo de Conceptos Ordinarios',
+        'tipo_vista': 'ordinarios'
+    }
+    return render(request, 'operaciones/catalogos/producto/lista_producto.html', context)
+```
+
+### DataTable API for Ordinary Concepts
+
+```python operaciones/views/catalogos.py
+def datatable_conceptos(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    modo_vista = request.GET.get('modo_vista', 'ordinarios')
+    unidad_medida = request.GET.get('unidad_medida', '')
+    
+    order_column_index = request.GET.get('order[0][column]', '0')
+    order_direction = request.GET.get('order[0][dir]', 'desc')
+
+    column_mapping = {
+        '0': 'id',
+        '1': 'partida_ordinaria' if modo_vista == 'ordinarios' else 'partida_extraordinaria',
+        '2': 'descripcion',
+        '3': 'unidad_medida__descripcion',
+        '4': 'sub_anexo__clave_anexo',
+        '5': 'precio_unitario_mn',
+        '6': 'precio_unitario_usd',
+        '7': 'activo'
+    }
+
+    order_field = column_mapping.get(order_column_index, 'id')
+    if order_direction == 'desc':
+        order_field = f'-{order_field}'
+
+    conceptos = ConceptoMaestro.objects.select_related(
+        'sub_anexo', 
+        'unidad_medida', 
+        'id_tipo_partida'
+    )
+
+    # Filter by ordinary concepts (tipo_partida_id = 6)
+    if modo_vista == 'ordinarios':
+        conceptos = conceptos.filter(id_tipo_partida_id=6)
+
+    if search_value:
+        conceptos = conceptos.filter(
+            Q(partida_ordinaria__icontains=search_value) |
+            Q(descripcion__icontains=search_value) |
+            Q(sub_anexo__clave_anexo__icontains=search_value)
+        )
+
+    if unidad_medida:
+        conceptos = conceptos.filter(unidad_medida_id=unidad_medida)
+
+    total_records_filtered = conceptos.count()
+    conceptos = conceptos.order_by(order_field)[start:start + length]
+
+    data = []
+    for c in conceptos:
+        anexo_display = c.sub_anexo.clave_anexo if c.sub_anexo else 'S/A'
+
+        data.append({
+            'id': c.id,
+            'id_partida': c.partida_ordinaria,
+            'descripcion': c.descripcion,
+            'unidad_medida': c.unidad_medida.clave,
+            'anexo': anexo_display,
+            'cantidad_referencia': str(c.cantidad),
+            'precio_unitario_mn': str(c.precio_unitario_mn),
+            'precio_unitario_usd': str(c.precio_unitario_usd),
+            'activo': 'Activo' if c.activo else 'Inactivo',
+            'activo_bool': c.activo,
+            'comentario': c.comentario,
+        })
+
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': ConceptoMaestro.objects.count(),
+        'recordsFiltered': total_records_filtered,
+        'data': data
+    })
+```
+
+<Info>
+  **Type ID 6**: Ordinary concepts are identified by `id_tipo_partida_id=6` in the database.
+</Info>
+
+## Extraordinary Concepts (PUEs)
+
+### Listing Extraordinary Concepts
+
+```python operaciones/views/catalogos.py
+@login_required(login_url='/accounts/login/')
+def lista_conceptos_extraordinarios(request):
+    """Renderiza la página de Conceptos Extraordinarios"""
+    context = {
+        'titulo': 'Catálogo de Conceptos Extraordinarios',
+        'tipo_vista': 'extraordinarios'
+    }
+    return render(request, 'operaciones/catalogos/producto/lista_producto.html', context)
+```
+
+### Creating Extraordinary Concepts
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def crear_producto(request):
+    """
+    Crea un nuevo concepto extraordinario.
+    """
+    try:
+        id_partida = request.POST.get('id_partida')
+        descripcion_concepto = request.POST.get('descripcion')
+        unidad_medida_id = request.POST.get('unidad_medida')
+        precio_unitario_mn = request.POST.get('precio_unitario_mn', 0)
+        precio_unitario_usd = request.POST.get('precio_unitario_usd', 0)
+        comentario = request.POST.get('comentario', '')
+        pte_origen = request.POST.get('pte_origen', '')
+        ot_origen = request.POST.get('ot_origen', '')
+        cantidad_post = request.POST.get('cantidad', 0)
+        tipo_partida_id = 7  # Extraordinary concept type
+
+        if not id_partida:
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'error', 
+                'detalles': 'El ID de partida es obligatorio'
+            })
+        
+        if not descripcion_concepto:
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'error', 
+                'detalles': 'La descripción es obligatoria'
+            })
+        
+        # Check for duplicates
+        if id_partida != 'NA':
+            if ConceptoMaestro.objects.filter(
+                partida_extraordinaria=id_partida, 
+                activo=True
+            ).exists():
+                return JsonResponse({
+                    'exito': False, 
+                    'tipo_aviso': 'advertencia', 
+                    'detalles': 'Ya existe un concepto extraordinario con esta clave.'
+                })
+        
+        try:
+            unidad_medida = UnidadMedida.objects.get(id=unidad_medida_id)
+            tipo_partida = Tipo.objects.get(id=tipo_partida_id)
+        except (UnidadMedida.DoesNotExist, Tipo.DoesNotExist):
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'advertencia', 
+                'detalles': 'Unidad de medida o Tipo de partida no válidos.'
+            })
+
+        try:
+            precio_mn = Decimal(precio_unitario_mn) if precio_unitario_mn else Decimal('0')
+            precio_usd = Decimal(precio_unitario_usd) if precio_unitario_usd else Decimal('0')
+            cantidad = Decimal(cantidad_post) if cantidad_post else Decimal('0')
+        except (InvalidOperation, ValueError):
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'error', 
+                'detalles': 'Valores numéricos inválidos.'
+            })
+
+        concepto = ConceptoMaestro.objects.create(
+            partida_extraordinaria=id_partida,
+            descripcion=descripcion_concepto,
+            id_tipo_partida=tipo_partida,
+            unidad_medida=unidad_medida,
+            precio_unitario_mn=precio_mn,
+            precio_unitario_usd=precio_usd,
+            cantidad=cantidad,
+            comentario=comentario,
+            pte_creacion=pte_origen,
+            ot_creacion=ot_origen,
+            estatus='EN ELABORACION',
+            activo=True
+        )
+        
+        return JsonResponse({
+            'exito': True,
+            'tipo_aviso': 'exito',
+            'detalles': 'Concepto extraordinario creado correctamente',
+            'id': concepto.id
+        })
+        
+    except Exception as e:
+        return JsonResponse({
+            'exito': False,
+            'tipo_aviso': 'error',
+            'detalles': f'Error al crear concepto: {str(e)}'
+        })
+```
+
+<Info>
+  **Type ID 7**: Extraordinary concepts (PUEs) are identified by `id_tipo_partida_id=7`.
+</Info>
+
+## Converting PUE to Ordinary Concept
+
+A key workflow allows converting approved extraordinary concepts to ordinary contracted items:
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["POST"])
+def convertir_pue_a_ordinario(request):
+    """
+    Toma un concepto extraordinario, le asigna Partida Ordinaria y Anexo,
+    y lo convierte a Ordinario.
+    """
+    try:
+        pue_id = request.POST.get('id_pue')
+        nueva_partida = request.POST.get('nueva_partida')
+        clave_anexo = request.POST.get('nuevo_anexo')
+        precio_mn = request.POST.get('precio_mn')
+        precio_usd = request.POST.get('precio_usd')
+        
+        if not pue_id or not nueva_partida or not clave_anexo:
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'advertencia', 
+                'detalles': 'Faltan datos obligatorios (Partida u Anexo).'
+            })
+
+        anexo_maestro_id = 1
+        
+        try:
+            anexo_maestro = AnexoContrato.objects.get(id=anexo_maestro_id)
+            sub_anexo, created = SubAnexo.objects.get_or_create(
+                anexo_maestro=anexo_maestro,
+                clave_anexo=clave_anexo.strip().upper(),
+                defaults={
+                    'descripcion': 'Generado por conversión', 
+                    'activo': True
+                }
+            )
+        except Exception as e:
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'error', 
+                'detalles': f'Error con el Anexo: {str(e)}'
+            })
+
+        # Check for duplicate ordinary item
+        if ConceptoMaestro.objects.filter(
+            sub_anexo=sub_anexo, 
+            partida_ordinaria=nueva_partida
+        ).exclude(id=pue_id).exists():
+            return JsonResponse({
+                'exito': False, 
+                'tipo_aviso': 'advertencia', 
+                'detalles': f'La partida {nueva_partida} ya existe en el anexo {clave_anexo}.'
+            })
+
+        concepto = ConceptoMaestro.objects.get(id=pue_id)
+        
+        # Convert to ordinary
+        concepto.id_tipo_partida_id = 6  # Change to ordinary type
+        concepto.partida_ordinaria = nueva_partida
+        concepto.sub_anexo = sub_anexo
+        
+        if precio_mn:
+            concepto.precio_unitario_mn = Decimal(precio_mn)
+        if precio_usd:
+            concepto.precio_unitario_usd = Decimal(precio_usd)
+            
+        concepto.estatus = "AUTORIZADO"
+        concepto.comentario = f"{concepto.comentario or ''} | Convertido de PUE ({concepto.partida_extraordinaria})".strip()
+        concepto.save()
+
+        return JsonResponse({'exito': True})
+
+    except ConceptoMaestro.DoesNotExist:
+        return JsonResponse({
+            'exito': False, 
+            'tipo_aviso': 'error', 
+            'detalles': 'El concepto PUE no existe.'
+        })
+    except Exception as e:
+        return JsonResponse({
+            'exito': False, 
+            'tipo_aviso': 'error', 
+            'detalles': str(e)
+        })
+```
+
+## Units of Measure API
+
+### Listing Units
+
+```python operaciones/views/catalogos.py
+def datatable_unidad_medida(request):
+    draw = int(request.GET.get('draw', 1))
+    start = int(request.GET.get('start', 0))
+    length = int(request.GET.get('length', 10))
+    search_value = request.GET.get('filtro', '')
+    
+    tipos = UnidadMedida.objects.filter(activo=1).annotate(
+        estado_texto=Case(
+            When(activo=True, then=Value('Activo')),
+            When(activo=False, then=Value('Inactivo')),
+            default=Value('Desconocido'),
+            output_field=CharField()
+        ),
+    )
+    
+    if search_value:
+        tipos = tipos.filter(
+            Q(descripcion__icontains=search_value) |
+            Q(activo__icontains=search_value)
+        )
+    
+    total_records = tipos.count()
+    tipos = tipos[start:start + length]
+    
+    data = []
+    for tipo in tipos:
+        data.append({
+            'id': tipo.id,
+            'descripcion': tipo.descripcion,
+            'activo': tipo.estado_texto,
+            'activo_bool': tipo.activo,
+            'clave': tipo.clave,
+        })
+    
+    return JsonResponse({
+        'draw': draw,
+        'recordsTotal': total_records,
+        'recordsFiltered': total_records,
+        'data': data
+    })
+```
+
+### Getting All Active Units
+
+```python operaciones/views/catalogos.py
+@require_http_methods(["GET"])
+def obtener_unidad_medida(request):
+    """Obtener una unidad específica o todas las unidades de medida"""
+    try:
+        unidad_id = request.GET.get('id')
+        
+        if unidad_id:
+            unidad_medida = UnidadMedida.objects.get(id=unidad_id)
+            return JsonResponse({
+                'id': unidad_medida.id,
+                'descripcion': unidad_medida.descripcion,
+                'clave': unidad_medida.clave,
+                'comentario': unidad_medida.comentario,
+                'activo': unidad_medida.activo
+            })
+        else:
+            unidades = UnidadMedida.objects.filter(activo=True)
+            unidades_data = []
+            
+            for unidad in unidades:
+                unidades_data.append({
+                    'id': unidad.id,
+                    'descripcion': unidad.descripcion,
+                    'clave': unidad.clave,
+                    'comentario': unidad.comentario,
+                    'activo': unidad.activo
+                })
+            
+            return JsonResponse(unidades_data, safe=False)
+            
+    except UnidadMedida.DoesNotExist:
+        return JsonResponse({
+            'tipo_aviso': 'error',
+            'detalles': 'Unidad de medida no encontrada'
+        }, status=404)
+```
+
+## URL Configuration
+
+```python operaciones/urls.py
+# URLs for Products & Concepts
+path('catalogos/producto/', catalogos.lista_producto, name='lista_producto'),
+path('catalogos/producto/datatable_producto/', catalogos.datatable_producto, name='datatable_producto'),
+path('catalogos/producto/crear/', catalogos.crear_producto, name='crear_producto'),
+path('catalogos/producto/eliminar/', catalogos.eliminar_producto, name='eliminar_producto'),
+path('catalogos/producto/obtener/', catalogos.obtener_producto, name='obtener_producto'),
+path('catalogos/producto/editar/', catalogos.editar_producto, name='editar_producto'),
+
+# URLs for Concepts (Ordinary/Extraordinary)
+path('catalogos/conceptos/ordinarios/', catalogos.lista_conceptos_ordinarios, name='lista_conceptos_ordinarios'),
+path('catalogos/conceptos/extraordinarios/', catalogos.lista_conceptos_extraordinarios, name='lista_conceptos_extraordinarios'),
+path('catalogos/concepto/datatable_concepto/', catalogos.datatable_conceptos, name='datatable_conceptos'),
+path('catalogos/concepto/pues_disponibles/', catalogos.datatable_pues_disponibles, name='pues_disponibles'),
+path('catalogos/concepto/convertir_pue/', catalogos.convertir_pue_a_ordinario, name='convertir_pue'),
+
+# URLs for Units of Measure
+path('catalogos/unidad_medida/', catalogos.lista_unidad_medida, name='lista_unidad_medida'),
+path('catalogos/datatable_unidad_medida/', catalogos.datatable_unidad_medida, name='datatable_unidad_medida'),
+path('catalogos/unidad_medida/crear/', catalogos.crear_unidad_medida, name='crear_unidad_medida'),
+path('catalogos/unidad_medida/eliminar/', catalogos.eliminar_unidad_medida, name='eliminar_unidad_medida'),
+path('catalogos/unidad_medida/obtener/', catalogos.obtener_unidad_medida, name='obtener_unidad_medida'),
+path('catalogos/unidad_medida/editar/', catalogos.editar_unidad_medida, name='editar_unidad_medida'),
+```
+
+## Best Practices
+
+<Warning>
+  **Pricing Validation**: Always validate decimal precision for pricing fields:
+  ```python
+  try:
+      precio_mn = Decimal(precio_unitario_mn) if precio_unitario_mn else Decimal('0')
+      precio_usd = Decimal(precio_unitario_usd) if precio_unitario_usd else Decimal('0')
+  except (InvalidOperation, ValueError):
+      return JsonResponse({
+          'exito': False, 
+          'tipo_aviso': 'error', 
+          'detalles': 'Valores numéricos inválidos.'
+      })
+  ```
+</Warning>
+
+<Tip>
+  **Efficient Queries**: Use `select_related()` for foreign key relationships:
+  ```python
+  conceptos = ConceptoMaestro.objects.select_related(
+      'sub_anexo', 
+      'unidad_medida', 
+      'id_tipo_partida'
+  )
+  ```
+</Tip>
+
+## Related Resources
+
+<Card title="Catalogs Overview" icon="database" href="/features/catalogs/overview">
+  Return to catalog management overview
+</Card>

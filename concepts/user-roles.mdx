@@ -1,0 +1,764 @@
+---
+title: 'User Roles & Permissions'
+description: 'Understanding user roles, permissions, and access control in SASCOP BME SubTec'
+icon: 'users'
+---
+
+## Overview
+
+SASCOP BME SubTec uses Django's built-in authentication and authorization system, extended with custom permissions for specialized workflows. The system manages access to sensitive operations data and financial information through role-based access control (RBAC).
+
+<Info>
+  User management is handled through Django's admin interface and leverages groups, permissions, and custom middleware for session management.
+</Info>
+
+## Authentication System
+
+### Login Mechanism
+
+The system implements a flexible authentication flow that accepts both username and email:
+
+<CodeGroup>
+  ```python Custom Login View
+  # From operaciones/views/login.py:11-52
+  @ensure_csrf_cookie 
+  def custom_login(request):
+      """Vista para login que acepta username o email"""
+      if request.user.is_authenticated:
+          return redirect('core:dashboard')
+      
+      session_expired = request.GET.get('session_expired')
+      
+      if request.method == 'POST':
+          username_or_email = request.POST.get('username')
+          password = request.POST.get('password')
+          
+          # Try authenticating with username first
+          user = authenticate(request, username=username_or_email, password=password)
+          
+          # If failed, try with email
+          if user is None:
+              try:
+                  user_by_email = User.objects.get(email__iexact=username_or_email)
+                  user = authenticate(request, username=user_by_email.username, password=password)
+              except User.DoesNotExist:
+                  user = None
+              except User.MultipleObjectsReturned:
+                  user_by_email = User.objects.filter(email__iexact=username_or_email).first()
+                  if user_by_email:
+                      user = authenticate(request, username=user_by_email.username, password=password)
+          
+          if user is not None:
+              login(request, user)
+              request.session['last_activity'] = timezone.now().timestamp()
+              response = redirect('core:dashboard')
+              response['Location'] += '?login_exitoso=1'
+              return response
+          else:
+              return render(request, 'operaciones/login.html', {
+                  'login_error': True,
+                  'error_message': 'Usuario/email o contraseña incorrectos.'
+              })
+  ```
+
+  ```python Custom Logout View
+  # From operaciones/views/login.py:63-82
+  class CustomLogoutView(LogoutView):
+      """LogoutView personalizado que limpia la variable de sesión de actividad"""
+      
+      def dispatch(self, request, *args, **kwargs):
+          if 'last_activity' in request.session:
+              del request.session['last_activity']
+          
+          request.session.save()
+          
+          return super().dispatch(request, *args, **kwargs)
+      
+      def get_next_page(self):
+          """Redirigir al login con parámetro de logout exitoso"""
+          next_page = super().get_next_page()
+          if next_page and 'login' in next_page:
+              return f"{next_page}?logout_exitoso=1"
+          else:
+              return "/accounts/login/?logout_exitoso=1"
+  ```
+</CodeGroup>
+
+**Key Features:**
+- Case-insensitive email lookup (`email__iexact`)
+- Handles multiple users with same email gracefully
+- CSRF protection enabled
+- Session activity tracking on login
+- User-friendly error messages
+- Logout cleanup with success messaging
+
+### Session Management
+
+The system implements automatic session timeout for security:
+
+<Accordion title="Session Timeout Middleware">
+  ```python operaciones/middleware.py:5-20
+  class SessionTimeoutMiddleware:
+      def __init__(self, get_response):
+          self.get_response = get_response
+
+      def __call__(self, request):
+          if request.user.is_authenticated:
+              last_activity = request.session.get('last_activity')
+              if last_activity:
+                  idle_time = timezone.now().timestamp() - last_activity
+                  if idle_time > settings.SESSION_COOKIE_AGE:
+                      request.session.flush()
+                      return redirect('operaciones:login?session_expired=1')
+              request.session['last_activity'] = timezone.now().timestamp()
+          
+          response = self.get_response(request)
+          return response
+  ```
+
+  **Configuration (settings.py:141-143):**
+  ```python
+  SESSION_COOKIE_AGE = 7200  # 2 hours in seconds
+  SESSION_SAVE_EVERY_REQUEST = True  # Update activity on every request
+  SESSION_EXPIRE_AT_BROWSER_CLOSE = False  # Persist sessions
+  ```
+
+  **Behavior:**
+  - Tracks `last_activity` timestamp in session
+  - Automatically logs out users after 2 hours of inactivity
+  - Redirects to login with `session_expired` parameter
+  - Activity updated on every authenticated request
+</Accordion>
+
+### Password Requirements
+
+Django's built-in validators are configured:
+
+```python settings.py:109-122
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+```
+
+**Requirements:**
+- Minimum 8 characters
+- Not too similar to user information
+- Not a common password
+- Not entirely numeric
+
+## User Model
+
+The system uses Django's default `User` model with these key fields:
+
+<Tabs>
+  <Tab title="Core Fields">
+    ```python
+    from django.contrib.auth.models import User
+    
+    # User fields:
+    username        # Required, unique identifier
+    email           # Email address (used for login)
+    password        # Hashed password
+    first_name      # User's first name
+    last_name       # User's last name
+    is_active       # Account enabled flag
+    is_staff        # Staff status (admin access)
+    is_superuser    # Superuser status (full access)
+    date_joined     # Registration timestamp
+    last_login      # Last login timestamp
+    ```
+  </Tab>
+  
+  <Tab title="Permission Fields">
+    ```python
+    # Permission-related fields:
+    groups              # ManyToMany to Group
+    user_permissions    # ManyToMany to Permission
+    
+    # Helper methods:
+    user.has_perm('operaciones.view_centro_consulta')
+    user.has_perms(['operaciones.add_pteheader', 'operaciones.change_pteheader'])
+    user.get_all_permissions()
+    user.get_group_permissions()
+    ```
+  </Tab>
+  
+  <Tab title="Creating Users">
+    ```python
+    # Via Django shell or management command:
+    from django.contrib.auth.models import User
+    
+    # Create regular user
+    user = User.objects.create_user(
+        username='jdoe',
+        email='jdoe@company.com',
+        password='secure_password',
+        first_name='John',
+        last_name='Doe'
+    )
+    
+    # Create superuser
+    superuser = User.objects.create_superuser(
+        username='admin',
+        email='admin@company.com',
+        password='admin_password'
+    )
+    
+    # Create staff user
+    staff = User.objects.create_user(
+        username='staff',
+        email='staff@company.com',
+        password='staff_password'
+    )
+    staff.is_staff = True
+    staff.save()
+    ```
+  </Tab>
+</Tabs>
+
+## Permissions System
+
+### Built-in Permissions
+
+Django automatically creates four permissions for each model:
+
+<CardGroup cols={2}>
+  <Card title="add_modelname" icon="plus">
+    Permission to create new instances
+    
+    Example: `operaciones.add_pteheader`
+  </Card>
+  
+  <Card title="change_modelname" icon="pen">
+    Permission to edit existing instances
+    
+    Example: `operaciones.change_ote`
+  </Card>
+  
+  <Card title="delete_modelname" icon="trash">
+    Permission to delete instances
+    
+    Example: `operaciones.delete_produccion`
+  </Card>
+  
+  <Card title="view_modelname" icon="eye">
+    Permission to view instances
+    
+    Example: `operaciones.view_producto`
+  </Card>
+</CardGroup>
+
+### Custom Permissions
+
+The system defines custom permissions for specialized access:
+
+```python operaciones/models/pte_models.py:44-46
+class Meta:
+    db_table = 'pte_header'
+    permissions = [
+        ("view_centro_consulta", "Puede visualizar el centro de consulta"),
+    ]
+```
+
+**Usage in Views:**
+
+```python
+from django.contrib.auth.decorators import permission_required
+from django.contrib.auth.mixins import PermissionRequiredMixin
+
+# Function-based view
+@permission_required('operaciones.view_centro_consulta', raise_exception=True)
+def centro_consulta_view(request):
+    # Only users with this permission can access
+    pass
+
+# Class-based view
+class CentroConsultaView(PermissionRequiredMixin, View):
+    permission_required = 'operaciones.view_centro_consulta'
+    
+    def get(self, request):
+        pass
+```
+
+## User Groups & Roles
+
+While not explicitly defined in code, here's a recommended group structure:
+
+### Recommended Group Configuration
+
+<Steps>
+  <Step title="Administrator Group">
+    **Permissions:** All permissions
+    
+    **Access:**
+    - Full system access
+    - User management
+    - System configuration
+    - All catalogs and modules
+    
+    **Users:** IT administrators, system managers
+  </Step>
+
+  <Step title="Project Manager Group">
+    **Permissions:**
+    - `add_pteheader`, `change_pteheader`, `view_pteheader`
+    - `add_ote`, `change_ote`, `view_ote`
+    - `view_produccion`, `view_estimacionheader`
+    - `view_centro_consulta`
+    
+    **Access:**
+    - Create and manage PTEs
+    - Create and manage OTEs
+    - View production and estimations
+    - Access BI dashboard
+    
+    **Users:** Project managers, coordinators
+  </Step>
+
+  <Step title="Production Supervisor Group">
+    **Permissions:**
+    - `view_pteheader`, `view_ote`
+    - `add_produccion`, `change_produccion`, `view_produccion`
+    - `add_reportediario`, `change_reportediario`
+    - `add_registrogpu`, `change_registrogpu`
+    
+    **Access:**
+    - View assigned work orders
+    - Record daily production
+    - Update production status
+    - Upload evidence
+    
+    **Users:** Site supervisors, superintendents
+  </Step>
+
+  <Step title="Finance Group">
+    **Permissions:**
+    - `view_pteheader`, `view_ote`, `view_produccion`
+    - `add_estimacionheader`, `change_estimacionheader`, `view_estimacionheader`
+    - `add_estimaciondetalle`, `change_estimaciondetalle`
+    - `view_centro_consulta`
+    
+    **Access:**
+    - View all projects and production
+    - Create and manage estimations
+    - Generate financial reports
+    - Access BI dashboard
+    
+    **Users:** Finance team, billing specialists
+  </Step>
+
+  <Step title="Viewer Group">
+    **Permissions:**
+    - `view_pteheader`, `view_ote`
+    - `view_produccion`
+    - `view_centro_consulta`
+    
+    **Access:**
+    - Read-only access to projects
+    - View production data
+    - Access reports and analytics
+    
+    **Users:** Clients, stakeholders, auditors
+  </Step>
+
+  <Step title="Catalog Manager Group">
+    **Permissions:**
+    - All add/change/view permissions for:
+      - `tipo`, `frente`, `estatus`, `sitio`
+      - `unidadmedida`, `responsableproyecto`, `cliente`
+      - `producto`, `conceptomaestro`
+    
+    **Access:**
+    - Manage master data catalogs
+    - Configure system parameters
+    - Maintain reference data
+    
+    **Users:** Data administrators, catalog managers
+  </Step>
+</Steps>
+
+## Implementing Groups
+
+Create groups and assign permissions via Django admin or programmatically:
+
+<CodeGroup>
+  ```python Via Django Admin
+  # Access: http://localhost:8000/admin/auth/group/
+  
+  1. Navigate to Authentication and Authorization > Groups
+  2. Click "Add Group"
+  3. Enter group name (e.g., "Project Managers")
+  4. Select appropriate permissions from "Available permissions"
+  5. Click "Save"
+  6. Assign users to groups in User admin
+  ```
+
+  ```python Via Django Shell
+  from django.contrib.auth.models import Group, Permission, User
+  from django.contrib.contenttypes.models import ContentType
+  from operaciones.models import PTEHeader, OTE, Produccion
+
+  # Create Project Manager group
+  pm_group, created = Group.objects.get_or_create(name='Project Managers')
+
+  # Get content types
+  pte_ct = ContentType.objects.get_for_model(PTEHeader)
+  ote_ct = ContentType.objects.get_for_model(OTE)
+
+  # Assign permissions
+  permissions = Permission.objects.filter(
+      content_type__in=[pte_ct, ote_ct],
+      codename__in=['add_pteheader', 'change_pteheader', 'view_pteheader',
+                    'add_ote', 'change_ote', 'view_ote']
+  )
+  pm_group.permissions.set(permissions)
+
+  # Add custom permission
+  centro_consulta_perm = Permission.objects.get(
+      codename='view_centro_consulta',
+      content_type=pte_ct
+  )
+  pm_group.permissions.add(centro_consulta_perm)
+
+  # Assign user to group
+  user = User.objects.get(username='jdoe')
+  user.groups.add(pm_group)
+  ```
+
+  ```python Via Management Command
+  # Create: operaciones/management/commands/setup_groups.py
+  
+  from django.core.management.base import BaseCommand
+  from django.contrib.auth.models import Group, Permission
+
+  class Command(BaseCommand):
+      help = 'Setup user groups and permissions'
+
+      def handle(self, *args, **options):
+          # Project Managers
+          pm_group, _ = Group.objects.get_or_create(name='Project Managers')
+          pm_perms = Permission.objects.filter(
+              codename__in=[
+                  'add_pteheader', 'change_pteheader', 'view_pteheader',
+                  'add_ote', 'change_ote', 'view_ote',
+                  'view_produccion', 'view_centro_consulta'
+              ]
+          )
+          pm_group.permissions.set(pm_perms)
+          
+          self.stdout.write(
+              self.style.SUCCESS('Successfully created Project Managers group')
+          )
+          
+          # Repeat for other groups...
+
+  # Run: python manage.py setup_groups
+  ```
+</CodeGroup>
+
+## View-Level Access Control
+
+Protect views using decorators and mixins:
+
+<Tabs>
+  <Tab title="Login Required">
+    ```python
+    from django.contrib.auth.decorators import login_required
+    
+    @login_required
+    def dashboard(request):
+        """Only authenticated users can access"""
+        context = {'modulo_actual': 'dashboard'}
+        return render(request, 'core/dashboard.html', context)
+    ```
+    
+    From `core/views/dashboard.py:5`
+  </Tab>
+  
+  <Tab title="Permission Required">
+    ```python
+    from django.contrib.auth.decorators import permission_required
+    
+    @permission_required('operaciones.add_pteheader', raise_exception=True)
+    def crear_pte(request):
+        """Only users with add_pteheader permission"""
+        # Create PTE logic
+        pass
+    
+    @permission_required([
+        'operaciones.view_pteheader',
+        'operaciones.view_ote',
+        'operaciones.view_produccion'
+    ], raise_exception=True)
+    def centro_consulta(request):
+        """Requires multiple permissions"""
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="User Test">
+    ```python
+    from django.contrib.auth.decorators import user_passes_test
+    
+    def is_project_manager(user):
+        return user.groups.filter(name='Project Managers').exists()
+    
+    def is_finance_user(user):
+        return user.groups.filter(name='Finance').exists() or user.is_superuser
+    
+    @user_passes_test(is_project_manager)
+    def manager_dashboard(request):
+        """Only for project managers"""
+        pass
+    
+    @user_passes_test(is_finance_user)
+    def financial_reports(request):
+        """Finance team and admins only"""
+        pass
+    ```
+  </Tab>
+  
+  <Tab title="Class-Based Views">
+    ```python
+    from django.contrib.auth.mixins import (
+        LoginRequiredMixin,
+        PermissionRequiredMixin,
+        UserPassesTestMixin
+    )
+    from django.views.generic import ListView
+    
+    class PTEListView(LoginRequiredMixin, PermissionRequiredMixin, ListView):
+        model = PTEHeader
+        permission_required = 'operaciones.view_pteheader'
+        template_name = 'operaciones/pte_list.html'
+    
+    class ProductionListView(UserPassesTestMixin, ListView):
+        model = Produccion
+        
+        def test_func(self):
+            return self.request.user.groups.filter(
+                name__in=['Production Supervisor', 'Project Managers']
+            ).exists()
+    ```
+  </Tab>
+</Tabs>
+
+## Template-Level Permissions
+
+Check permissions in templates:
+
+```django
+{% if perms.operaciones.add_pteheader %}
+  <a href="{% url 'operaciones:crear_pte' %}" class="btn btn-primary">
+    <i class="fas fa-plus"></i> Crear PTE
+  </a>
+{% endif %}
+
+{% if perms.operaciones.change_ote %}
+  <button onclick="editOTE({{ ote.id }})" class="btn btn-warning">
+    <i class="fas fa-edit"></i> Editar
+  </button>
+{% endif %}
+
+{% if user.is_superuser or user.groups.all.0.name == 'Finance' %}
+  <div class="financial-data">
+    <strong>Monto Total:</strong> ${{ ote.monto_mxn|floatformat:2 }}
+  </div>
+{% endif %}
+
+{% if perms.operaciones.view_centro_consulta %}
+  <li>
+    <a href="{% url 'operaciones:centro_consulta' %}">
+      <i class="fas fa-chart-bar"></i> Centro de Consulta
+    </a>
+  </li>
+{% endif %}
+```
+
+## Activity Logging
+
+The system tracks user activity:
+
+```python operaciones/models/registro_actividad_models.py
+class RegistroActividad(models.Model):
+    usuario_id = models.IntegerField()
+    usuario_nombre = models.CharField(max_length=150)
+    accion = models.CharField(max_length=100)
+    modulo = models.CharField(max_length=100)
+    descripcion = models.TextField()
+    fecha = models.DateTimeField(auto_now_add=True)
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    
+    class Meta:
+        db_table = 'registro_actividad'
+        ordering = ['-fecha']
+```
+
+**Usage:**
+```python
+from operaciones.models import RegistroActividad
+
+def crear_pte(request):
+    # Create PTE logic...
+    
+    # Log activity
+    RegistroActividad.objects.create(
+        usuario_id=request.user.id,
+        usuario_nombre=request.user.get_full_name(),
+        accion='CREATE',
+        modulo='PTEs',
+        descripcion=f'Creó PTE {pte.oficio_pte}',
+        ip=request.META.get('REMOTE_ADDR')
+    )
+```
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Password Management">
+    - Use strong passwords (enforced by validators)
+    - Change default admin password immediately
+    - Use Django's password reset functionality
+    - Never store passwords in plain text
+    - Consider two-factor authentication for sensitive roles
+  </Accordion>
+  
+  <Accordion title="Session Security">
+    ```python settings.py
+    # In production:
+    SESSION_COOKIE_SECURE = True      # HTTPS only
+    CSRF_COOKIE_SECURE = True         # HTTPS only
+    SESSION_COOKIE_HTTPONLY = True    # Prevent JS access
+    SESSION_COOKIE_AGE = 7200         # 2 hour timeout
+    SESSION_SAVE_EVERY_REQUEST = True # Update on activity
+    
+    # CSRF Protection
+    CSRF_TRUSTED_ORIGINS = [
+        'https://your-domain.com',
+    ]
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission Auditing">
+    Regularly review user permissions:
+    
+    ```python
+    # Check user permissions
+    user = User.objects.get(username='jdoe')
+    print(user.get_all_permissions())
+    print(user.get_group_permissions())
+    
+    # Check group members
+    group = Group.objects.get(name='Project Managers')
+    print(group.user_set.all())
+    
+    # Check permission usage
+    perm = Permission.objects.get(codename='view_centro_consulta')
+    print(perm.user_set.all())
+    print(perm.group_set.all())
+    ```
+  </Accordion>
+  
+  <Accordion title="Access Control Lists">
+    For row-level permissions, consider:
+    
+    ```python
+    class PTEHeader(models.Model):
+        # ... fields ...
+        created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+        
+        def can_edit(self, user):
+            """Check if user can edit this PTE"""
+            if user.is_superuser:
+                return True
+            if user == self.created_by:
+                return True
+            if user.groups.filter(name='Project Managers').exists():
+                return True
+            return False
+    
+    # In views:
+    def editar_pte(request, pte_id):
+        pte = get_object_or_404(PTEHeader, id=pte_id)
+        if not pte.can_edit(request.user):
+            raise PermissionDenied
+        # Edit logic...
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## User Management Workflows
+
+<Steps>
+  <Step title="Creating New Users">
+    1. Access Django admin: `/admin/auth/user/add/`
+    2. Set username and password
+    3. Set email (required for login)
+    4. Set first and last name
+    5. Assign to appropriate groups
+    6. Set staff/superuser status if needed
+    7. Save
+  </Step>
+
+  <Step title="Modifying Permissions">
+    1. Access user in Django admin
+    2. Scroll to "Groups" section
+    3. Add/remove groups as needed
+    4. Or modify "User permissions" directly
+    5. Save changes
+  </Step>
+
+  <Step title="Deactivating Users">
+    Instead of deleting:
+    1. Edit user in Django admin
+    2. Uncheck "Active" checkbox
+    3. Save
+    
+    User can no longer log in but data remains intact.
+  </Step>
+
+  <Step title="Password Reset">
+    For forgotten passwords:
+    1. User clicks "Forgot password" on login
+    2. Enters email address
+    3. Receives reset link via email
+    4. Sets new password
+    
+    Or admin can reset:
+    ```bash
+    python manage.py changepassword username
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Workflow Guide" icon="diagram-project" href="/concepts/workflow">
+    Learn the PTE to OTE operational workflow
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand the system architecture
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install and configure the system
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started quickly
+  </Card>
+</CardGroup>
+
+<Note>
+  This user roles guide is based on Django's authentication system (`django.contrib.auth`) with custom extensions defined in the SASCOP BME SubTec codebase.
+</Note>

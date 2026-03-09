@@ -1,0 +1,555 @@
+---
+title: 'Global Search API'
+description: 'Cross-module document search with advanced filtering and pagination'
+icon: 'magnifying-glass'
+---
+
+## Overview
+
+The Global Search API provides unified searching across PTEs, Work Orders, and Production records with:
+
+- Multi-source data integration (UNION ALL queries)
+- Dynamic filter construction
+- Paginated results with DataTables compatibility
+- File delivery status tracking
+
+## API Endpoint
+
+### POST /centro_consulta/busqueda-global/
+
+```python operaciones/views/centro_consulta.py
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def fn_api_busqueda_global(request):
+    """
+    Endpoint API para el Buscador Global.
+    """
+    try:
+        cuerpo_peticion = json.loads(request.body)
+        salto_registros  = int(cuerpo_peticion.get("start", 0))
+        limite_registros = int(cuerpo_peticion.get("length", 10))
+        numero_dibujo    = int(cuerpo_peticion.get("draw", 1))
+
+        resultados_paginados, total_filtrados = fn_ejecutar_busqueda_global(
+            request, 
+            cuerpo_peticion, 
+            salto_registros, 
+            limite_registros
+        )
+
+        return JsonResponse({
+            "draw": numero_dibujo,
+            "recordsTotal": total_filtrados,
+            "recordsFiltered": total_filtrados,
+            "data": resultados_paginados
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": "JSON inválido"
+        }, status=400)
+    except Exception as error_servidor:
+        print(f"Error en Buscador: {str(error_servidor)}")
+        return JsonResponse({
+            "estatus": "error", 
+            "mensaje": str(error_servidor)
+        }, status=500)
+```
+
+### Request Format
+
+<CodeGroup>
+```json Request Payload
+{
+  "draw": 1,
+  "start": 0,
+  "length": 10,
+  "filtros": {
+    "origenes": ["PTE", "OT", "PROD"],
+    "lideres_id": ["1", "3"],
+    "clientes_id": ["5"],
+    "frentes_id": ["1", "2"],
+    "sitios_id": ["10", "15"],
+    "nombres_doc": ["PROPUESTA TECNICA", "CONTRATO"],
+    "estatus_proceso_id": ["2", "5"],
+    "ots_id": ["OT-2024-001"],
+    "fecha_inicio": "2024-01-01",
+    "fecha_fin": "2024-12-31",
+    "texto_busqueda": "maintenance",
+    "check_entregados": true,
+    "check_no_entregados": false,
+    "buscar_por_frente": "1"
+  }
+}
+```
+
+```json Response
+{
+  "draw": 1,
+  "recordsTotal": 156,
+  "recordsFiltered": 156,
+  "data": [
+    {
+      "id_origen": 42,
+      "tipo": "PTE",
+      "folio": "PTE-2024-042",
+      "cliente": "PEMEX",
+      "lider": "Juan Pérez",
+      "frente": "N/A",
+      "sitio": "NO APLICA",
+      "documento": "PROPUESTA TECNICA",
+      "fecha": "15/03/2024",
+      "archivo": "/media/ptes/propuesta_042.pdf",
+      "estatus_paso_id": 2
+    },
+    {
+      "id_origen": 87,
+      "tipo": "OT",
+      "folio": "OT-2024-001",
+      "cliente": "CFE",
+      "lider": "María Gómez",
+      "frente": "PATIO",
+      "sitio": "PATIO A",
+      "documento": "CONTRATO",
+      "fecha": "20/03/2024",
+      "archivo": "/media/ots/contrato_001.pdf",
+      "estatus_paso_id": 5
+    }
+  ]
+}
+```
+</CodeGroup>
+
+## Search Execution
+
+```python operaciones/views/centro_consulta.py
+def fn_ejecutar_busqueda_global(request, payload, salto_bd, limite_bd):
+    """
+    Ejecuta el bloque SQL maestro paginado.
+    """
+    filtros = payload.get("filtros", {})
+    origenes = filtros.get("origenes", [])
+
+    subconsulta_dinamica   = fn_obtener_subconsulta_origenes(origenes)
+    clausula_where, params = fn_construir_where_dinamico(filtros)
+    params["limite_bd"]    = limite_bd
+    params["salto_bd"]     = salto_bd
+
+    sql_conteo = f"""
+        SELECT COUNT(*) AS total_registros
+        FROM (
+            {subconsulta_dinamica}
+        ) AS T
+        {clausula_where}
+    """
+
+    sql_datos = f"""
+        SELECT
+            T.id_origen,
+            T.tipo,
+            T.folio,
+            T.cliente,
+            T.lider,
+            T.frente,
+            T._fid_estatus_paso AS estatus_paso_id,
+            
+            -- Dynamic site resolution logic
+            CASE
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_plataforma::text IN %(ids_sitios)s
+                    THEN T._fid_plataforma
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_embarcacion::text IN %(ids_sitios)s
+                    THEN T._fid_embarcacion
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_patio::text IN %(ids_sitios)s
+                    THEN T._fid_patio
+                ELSE T.id_sitio_oficial
+            END AS id_sitio,
+            
+            CASE
+                WHEN %(buscar_por_frente)s = '1'
+                    THEN T.sitio_oficial
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_plataforma::text IN %(ids_sitios)s
+                    THEN T.sitio_plat_desc
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_embarcacion::text IN %(ids_sitios)s
+                    THEN T.sitio_emb_desc
+                WHEN %(buscar_por_frente)s = '0' AND %(sw_sitio)s = 1 AND T._fid_patio::text IN %(ids_sitios)s
+                    THEN T.sitio_pat_desc
+                ELSE CONCAT_WS(' / ',
+                    NULLIF(T.sitio_pat_desc,  ''),
+                    NULLIF(T.sitio_emb_desc,  ''),
+                    NULLIF(T.sitio_plat_desc, '')
+                )
+            END AS sitio,
+            
+            T.documento,
+            T.fecha,
+            T.archivo
+        FROM (
+            {subconsulta_dinamica}
+        ) AS T
+        {clausula_where}
+        ORDER BY T._fecha_sort ASC NULLS LAST
+        LIMIT %(limite_bd)s OFFSET %(salto_bd)s;
+    """
+
+    resultado_conteo     = ejecutar_query_sql(sql_conteo, params)
+    total_filtrados      = resultado_conteo[0]["total_registros"] if resultado_conteo else 0
+    resultados_paginados = ejecutar_query_sql(sql_datos, params)
+
+    return resultados_paginados, total_filtrados
+```
+
+## Filter Parameters
+
+### Available Filters
+
+<ParamField path="origenes" type="array">
+  Data sources to search: `["PTE", "OT", "PROD"]`
+</ParamField>
+
+<ParamField path="lideres_id" type="array">
+  Project responsible IDs: `["1", "3", "5"]`
+</ParamField>
+
+<ParamField path="clientes_id" type="array">
+  Client IDs: `["2", "7"]`
+</ParamField>
+
+<ParamField path="frentes_id" type="array">
+  Front IDs (OT only): `["1", "2", "4"]`
+</ParamField>
+
+<ParamField path="sitios_id" type="array">
+  Site IDs: `["10", "15", "23"]`
+</ParamField>
+
+<ParamField path="nombres_doc" type="array">
+  Document names: `["PROPUESTA TECNICA", "CONTRATO"]`
+</ParamField>
+
+<ParamField path="estatus_proceso_id" type="array">
+  Status IDs: `["2", "5", "8"]`
+</ParamField>
+
+<ParamField path="ots_id" type="array">
+  Work order folios: `["OT-2024-001", "OT-2024-042"]`
+</ParamField>
+
+<ParamField path="fecha_inicio" type="string">
+  Start date (YYYY-MM-DD): `"2024-01-01"`
+</ParamField>
+
+<ParamField path="fecha_fin" type="string">
+  End date (YYYY-MM-DD): `"2024-12-31"`
+</ParamField>
+
+<ParamField path="texto_busqueda" type="string">
+  Free text search across folio, document, client, leader
+</ParamField>
+
+<ParamField path="check_entregados" type="boolean">
+  Include delivered documents
+</ParamField>
+
+<ParamField path="check_no_entregados" type="boolean">
+  Include pending documents
+</ParamField>
+
+<ParamField path="buscar_por_frente" type="string">
+  Site search mode: `"1"` (by front) or `"0"` (free search)
+</ParamField>
+
+## Dynamic WHERE Construction
+
+```python operaciones/views/centro_consulta.py
+def fn_construir_where_dinamico(filtros):
+    lista_lideres    = filtros.get("lideres_id", [])
+    lista_clientes   = filtros.get("clientes_id", [])
+    lista_frentes    = filtros.get("frentes_id", [])
+    lista_sitios     = filtros.get("sitios_id", [])
+    lista_documentos = filtros.get("nombres_doc", [])
+    lista_estatus    = filtros.get("estatus_proceso_id", [])
+    lista_ots        = filtros.get("ots_id", [])
+
+    fecha_ini_input = filtros.get("fecha_inicio")
+    fecha_fin_input = filtros.get("fecha_fin")
+    texto_busqueda  = filtros.get("texto_busqueda", "")
+
+    check_entregados = filtros.get("check_entregados")
+    check_pendientes = filtros.get("check_no_entregados")
+
+    buscar_por_frente = filtros.get("buscar_por_frente") or "1"
+
+    # Delivery status logic
+    ninguno_marcado  = not check_entregados and not check_pendientes
+    filtro_entregado = check_entregados or ninguno_marcado
+    filtro_pendiente = check_pendientes or ninguno_marcado
+
+    condiciones = []
+    params = {}
+
+    # OT filter
+    if lista_ots:
+        condiciones.append("T.folio IN %(ids_ots)s")
+        params["ids_ots"] = tuple(lista_ots)
+
+    # Leader filter
+    if lista_lideres:
+        condiciones.append("T._fid_lider::text IN %(ids_lideres)s")
+        params["ids_lideres"] = tuple(lista_lideres)
+
+    # Client filter
+    if lista_clientes:
+        condiciones.append("T._fid_cliente::text IN %(ids_clientes)s")
+        params["ids_clientes"] = tuple(lista_clientes)
+
+    # Document type filter
+    if lista_documentos:
+        condiciones.append("T.documento IN %(nombres_documentos)s")
+        params["nombres_documentos"] = tuple(lista_documentos)
+
+    # Status filter
+    if lista_estatus:
+        condiciones.append("T._fid_estatus_paso::text IN %(ids_estatus)s")
+        params["ids_estatus"] = tuple(lista_estatus)
+
+    # Text search
+    if texto_busqueda:
+        condiciones.append("""
+            (
+                T.documento ILIKE %(texto)s OR
+                T.folio ILIKE %(texto)s OR
+                T.cliente ILIKE %(texto)s OR
+                T.lider ILIKE %(texto)s
+            )
+        """)
+        params["texto"] = f"%{texto_busqueda}%"
+
+    # Complex site filter logic
+    if lista_sitios:
+        params["ids_sitios"] = tuple(lista_sitios)
+        if buscar_por_frente == "1":
+            if lista_frentes:
+                params["ids_frentes"] = tuple(lista_frentes)
+                condiciones.append("""
+                    (
+                        T._fid_frente::text IN %(ids_frentes)s AND
+                        (
+                            (T._fid_frente = 1 AND T._fid_patio::text IN %(ids_sitios)s) OR
+                            (T._fid_frente = 2 AND T._fid_embarcacion::text IN %(ids_sitios)s) OR
+                            (T._fid_frente = 4 AND T._fid_plataforma::text IN %(ids_sitios)s)
+                        )
+                    )
+                """)
+            else:
+                condiciones.append("""
+                    (
+                        (T._fid_frente = 1 AND T._fid_patio::text IN %(ids_sitios)s) OR
+                        (T._fid_frente = 2 AND T._fid_embarcacion::text IN %(ids_sitios)s) OR
+                        (T._fid_frente = 4 AND T._fid_plataforma::text IN %(ids_sitios)s)
+                    )
+                """)
+        else:
+            # Free site search (searches all site fields)
+            condiciones.append("""
+                (
+                    T._fid_patio::text IN %(ids_sitios)s OR
+                    T._fid_embarcacion::text IN %(ids_sitios)s OR
+                    T._fid_plataforma::text IN %(ids_sitios)s
+                )
+            """)
+
+    elif lista_frentes:
+        condiciones.append("T._fid_frente::text IN %(ids_frentes)s")
+        params["ids_frentes"] = tuple(lista_frentes)
+
+    # File delivery filter
+    if filtro_entregado and filtro_pendiente:
+        pass  # Show both
+    elif filtro_entregado:
+        condiciones.append("(T.archivo IS NOT NULL AND LENGTH(TRIM(T.archivo)) > 5)")
+    elif filtro_pendiente:
+        condiciones.append("(T.archivo IS NULL OR LENGTH(TRIM(T.archivo)) <= 5)")
+
+    # Date range filter
+    if fecha_ini_input and fecha_fin_input:
+        condiciones.append("T._fecha_sort BETWEEN %(fecha_ini)s::date AND %(fecha_fin)s::date")
+        params["fecha_ini"] = fecha_ini_input
+        params["fecha_fin"] = fecha_fin_input
+
+    # Build WHERE clause
+    if condiciones:
+        clausula_where = "WHERE\n         " + "\n         AND ".join(condiciones)
+    else:
+        clausula_where = ""
+
+    params["buscar_por_frente"] = buscar_por_frente
+    params["sw_sitio"]          = 1 if lista_sitios else 0
+    params["ids_sitios"]        = params.get("ids_sitios", ('-1',))
+
+    return clausula_where, params
+```
+
+## Site Search Modes
+
+<Tabs>
+  <Tab title="By Front (buscar_por_frente=1)">
+    **Standard Mode**: Sites are resolved based on the front type.
+    
+    - Front 1 (PATIO) → searches `id_patio`
+    - Front 2 (EMBARCACION) → searches `id_embarcacion`
+    - Front 4 (PLATAFORMA) → searches `id_plataforma`
+    
+    This ensures accurate filtering when front context is known.
+  </Tab>
+  
+  <Tab title="Free Search (buscar_por_frente=0)">
+    **Flexible Mode**: Searches all site fields simultaneously.
+    
+    Useful when:
+    - Site appears in multiple fronts
+    - Front context is ambiguous
+    - User wants comprehensive results
+    
+    Returns records where site ID matches ANY site field.
+  </Tab>
+</Tabs>
+
+## Catalog Endpoints
+
+### GET /centro_consulta/catalogos/ots/
+
+Search work orders with autocomplete:
+
+```python operaciones/views/centro_consulta.py
+@login_required
+def fn_api_obtener_ots_cc(request):
+    try:
+        q      = request.GET.get("q", "").strip()
+        pagina = int(request.GET.get("page", 1))
+
+        if len(q) < 2:
+            return JsonResponse({"results": [], "more": False})
+
+        por_pagina = 20
+        salto      = (pagina - 1) * por_pagina
+        termino    = f"%{q}%"
+
+        sql = """
+            SELECT DISTINCT
+                o.orden_trabajo AS id,
+                o.orden_trabajo AS texto
+            FROM ot o
+            WHERE o.estatus = 1
+                AND o.orden_trabajo ILIKE %(termino)s
+            ORDER BY o.orden_trabajo
+            LIMIT %(limite)s OFFSET %(salto)s
+        """
+        params     = {"termino": termino, "limite": por_pagina + 1, "salto": salto}
+        resultados = ejecutar_query_sql(sql, params)
+
+        hay_mas   = len(resultados) > por_pagina
+        listado   = resultados[:por_pagina]
+        respuesta = [{"id": r["id"], "text": r["texto"]} for r in listado]
+
+        return JsonResponse({"results": respuesta, "more": hay_mas})
+    except Exception as error_proceso:
+        print(f"Error al obtener catálogo de OTs: {str(error_proceso)}")
+        return JsonResponse({"results": [], "more": False})
+```
+
+### GET /centro_consulta/catalogos/partidas/
+
+Search work items with autocomplete:
+
+```python operaciones/views/centro_consulta.py
+@login_required
+def fn_api_buscar_partidas_cc(request):
+    try:
+        q      = request.GET.get("q", "").strip()
+        pagina = int(request.GET.get("page", 1))
+
+        if len(q) < 2:
+            return JsonResponse({"results": [], "more": False})
+
+        por_pagina = 20
+        salto      = (pagina - 1) * por_pagina
+        termino    = f"%{q}%"
+
+        sql = """
+            SELECT DISTINCT
+                pai.id_partida AS id,
+                pai.id_partida || ' — ' || COALESCE(pai.descripcion_concepto, '') AS texto
+            FROM partida_anexo_importada pai
+            WHERE
+                pai.id_partida IS NOT NULL
+                AND (
+                    pai.id_partida ILIKE %(termino)s
+                    OR pai.descripcion_concepto ILIKE %(termino)s
+                )
+            ORDER BY pai.id_partida
+            LIMIT %(limite)s OFFSET %(salto)s
+        """
+        params     = {"termino": termino, "limite": por_pagina + 1, "salto": salto}
+        resultados = ejecutar_query_sql(sql, params)
+
+        hay_mas   = len(resultados) > por_pagina
+        listado   = resultados[:por_pagina]
+        respuesta = [{"id": r["id"], "text": r["texto"]} for r in listado]
+
+        return JsonResponse({"results": respuesta, "more": hay_mas})
+    except Exception as error_proceso:
+        print(f"Error al buscar partidas: {str(error_proceso)}")
+        return JsonResponse({"results": [], "more": False})
+```
+
+<Info>
+  **Pagination**: All catalog endpoints support pagination with `page` parameter and return `more` flag for infinite scroll.
+</Info>
+
+## Performance Tips
+
+<Steps>
+  <Step title="Limit Source Selection">
+    Only request needed data sources:
+    ```json
+    {"filtros": {"origenes": ["OT"]}}  // OT only, faster than all 3
+    ```
+  </Step>
+  
+  <Step title="Use Specific Filters">
+    More filters = smaller result set = faster queries:
+    ```json
+    {"filtros": {"clientes_id": ["5"], "fecha_inicio": "2024-01-01"}}
+    ```
+  </Step>
+  
+  <Step title="Reasonable Page Sizes">
+    Keep `length` between 10-50 for optimal performance:
+    ```json
+    {"length": 25}  // Good balance
+    ```
+  </Step>
+  
+  <Step title="Leverage Text Search">
+    Use specific search terms to reduce result set:
+    ```json
+    {"filtros": {"texto_busqueda": "OT-2024-"}}  // Prefix search
+    ```
+  </Step>
+</Steps>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Query Center Overview" icon="chart-mixed" href="/features/centro-consulta/overview">
+    Architecture and data sources
+  </Card>
+  <Card title="Dashboards" icon="chart-line" href="/features/centro-consulta/dashboards">
+    Analytics and visualizations
+  </Card>
+  <Card title="Reports & Export" icon="file-export" href="/features/centro-consulta/reports-export">
+    Excel generation from search results
+  </Card>
+</CardGroup>

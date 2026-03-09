@@ -1,0 +1,257 @@
+---
+title: Work Orders (OTE) Overview
+description: Comprehensive overview of the Work Order Management system in SASCOP BME SubTec
+---
+
+## Introduction
+
+The OTE (Órdenes de Trabajo Ejecutivo / Work Orders) module manages the complete lifecycle of work orders, from creation to execution and completion. Work orders are derived from PTEs and represent the actual execution phase of marine engineering projects.
+
+<Info>
+  Work Orders in SASCOP are categorized into two main types:
+  - **Initial Orders (Type 4)**: Original work orders created from PTEs
+  - **Reprogrammed Orders (Type 5)**: Rescheduled versions of initial orders
+</Info>
+
+## OTE Model Structure
+
+The core `OTE` model contains all essential work order information:
+
+```python operaciones/models/ote_models.py
+class OTE(models.Model): 
+    id_tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 2})
+    id_pte_header = models.ForeignKey(PTEHeader, on_delete=models.CASCADE, null=True, blank=True)
+    orden_trabajo = models.CharField(max_length=100)
+    descripcion_trabajo = models.TextField()
+    id_responsable_proyecto = models.ForeignKey(ResponsableProyecto, on_delete=models.CASCADE)
+    responsable_cliente = models.CharField(max_length=200)
+    oficio_ot = models.CharField(max_length=100)
+    id_estatus_ot = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 2})
+    fecha_inicio_programado = models.DateField(blank=True, null=True)
+    fecha_inicio_real = models.DateField(blank=True, null=True)
+    fecha_termino_programado = models.DateField(blank=True, null=True)
+    fecha_termino_real = models.DateField(blank=True, null=True)
+    estatus = models.IntegerField(default=1)
+    num_reprogramacion = models.IntegerField(null=True, blank=True)
+    ot_principal = models.IntegerField(null=True, blank=True)
+    comentario = models.TextField(blank=True) 
+    monto_mxn = models.DecimalField(decimal_places=2, max_digits=25, null=True, blank=True, default=0)
+    monto_usd = models.DecimalField(decimal_places=2, max_digits=25, null=True, blank=True, default=0)
+    id_frente = models.ForeignKey(Frente, on_delete=models.SET_NULL, null=True, blank=True)
+    id_embarcacion = models.IntegerField(null=True, blank=True)
+    id_plataforma = models.IntegerField(null=True, blank=True)
+    id_intercom = models.IntegerField(null=True, blank=True)
+    id_patio = models.IntegerField(null=True, blank=True)
+    plazo_dias = models.IntegerField(null=True, blank=True)
+    id_cliente = models.ForeignKey(Cliente, on_delete=models.CASCADE, null=True, blank=True)
+    
+    requiere_patio = models.BooleanField(default=False, verbose_name="Requiere Fase en Patio")
+    fecha_inicio_patio = models.DateField(blank=True, null=True, verbose_name="Inicio Fase Patio")
+    fecha_fin_patio = models.DateField(blank=True, null=True, verbose_name="Fin Fase Patio")
+```
+
+### Key Field Descriptions
+
+<AccordionGroup>
+  <Accordion title="Identification Fields">
+    - `orden_trabajo`: Unique work order identifier/folio
+    - `oficio_ot`: Official document number
+    - `id_tipo`: Work order type (4 = Initial, 5 = Reprogrammed)
+    - `id_pte_header`: Link to parent PTE document
+  </Accordion>
+
+  <Accordion title="Scheduling Fields">
+    - `fecha_inicio_programado`: Planned start date
+    - `fecha_inicio_real`: Actual start date
+    - `fecha_termino_programado`: Planned end date
+    - `fecha_termino_real`: Actual completion date
+    - `plazo_dias`: Duration in days
+  </Accordion>
+
+  <Accordion title="Location Fields">
+    - `id_frente`: Work front (land/offshore)
+    - `id_embarcacion`: Vessel ID if offshore
+    - `id_plataforma`: Platform ID if offshore
+    - `id_intercom`: Interconnection ID
+    - `id_patio`: Yard ID for land-based work
+    - `requiere_patio`: Flag indicating if yard phase is required
+  </Accordion>
+
+  <Accordion title="Financial Fields">
+    - `monto_mxn`: Budget amount in Mexican Pesos
+    - `monto_usd`: Budget amount in US Dollars
+  </Accordion>
+
+  <Accordion title="Reprogramming Fields">
+    - `ot_principal`: ID of the original work order (for reprogrammed orders)
+    - `num_reprogramacion`: Sequential reprogramming number
+  </Accordion>
+</AccordionGroup>
+
+## Site Assignment with Query Optimization
+
+The `con_sitios` class method efficiently loads site information using prefetching:
+
+```python operaciones/models/ote_models.py
+@classmethod
+def con_sitios(cls, **filters):
+    """
+    Clase para filtar por sitio
+    """
+    ots = list(cls.objects.filter(**filters))
+    
+    if not ots:
+        return ots
+        
+    sitio_ids = set()
+    for ot in ots:
+        if ot.id_embarcacion: sitio_ids.add(ot.id_embarcacion)
+        if ot.id_plataforma: sitio_ids.add(ot.id_plataforma)
+        if ot.id_intercom: sitio_ids.add(ot.id_intercom)
+        if ot.id_patio: sitio_ids.add(ot.id_patio)
+    
+    sitios_dict = {}
+    if sitio_ids:
+        sitios_dict = {sitio.id: sitio for sitio in Sitio.objects.filter(id__in=sitio_ids)}
+    
+    for ot in ots:
+        ot.embarcacion_obj = sitios_dict.get(ot.id_embarcacion)
+        ot.plataforma_obj = sitios_dict.get(ot.id_plataforma) 
+        ot.intercom_obj = sitios_dict.get(ot.id_intercom)
+        ot.patio_obj = sitios_dict.get(ot.id_patio)
+
+    return ots
+```
+
+<Note>
+  This method reduces database queries by fetching all related sites in a single query, then attaching them as attributes to each OTE instance.
+</Note>
+
+## Reprogramming Properties
+
+Two computed properties track reprogramming relationships:
+
+```python operaciones/models/ote_models.py
+@property
+def tiene_reprogramaciones(self):
+    """Retorna True si esta OT tiene reprogramaciones asociadas"""
+    if self.id_tipo_id != 4:  # Solo para OTs iniciales
+        return False
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).exists()
+
+@property
+def count_reprogramaciones(self):
+    """Retorna el número de reprogramaciones asociadas"""
+    if self.id_tipo_id != 4:
+        return 0
+    
+    return OTE.objects.filter(
+        ot_principal=self.id,
+        id_tipo_id=5,
+        estatus__in=[-1, 1]
+    ).count()
+```
+
+<CardGroup cols={2}>
+  <Card title="tiene_reprogramaciones" icon="circle-check">
+    Returns `True` if the initial work order has active reprogrammed versions
+  </Card>
+  <Card title="count_reprogramaciones" icon="hashtag">
+    Returns the number of active reprogrammed work orders linked to this initial order
+  </Card>
+</CardGroup>
+
+## Work Order Details (Steps)
+
+Each work order contains multiple execution steps tracked through `OTDetalle`:
+
+```python operaciones/models/ote_models.py
+class OTDetalle(models.Model):
+    id_ot = models.ForeignKey(OTE, on_delete=models.CASCADE, related_name='detalles')
+    estatus_paso = models.ForeignKey(Estatus, on_delete=models.CASCADE, limit_choices_to={'nivel_afectacion': 4})
+    id_paso = models.ForeignKey(PasoOt, on_delete=models.CASCADE)
+    fecha_entrega = models.DateField(null=True, blank=True)
+    fecha_inicio = models.DateField(null=True, blank=True)
+    fecha_termino = models.DateField(null=True, blank=True)
+    comentario = models.TextField(blank=True, null=True)
+    archivo = models.TextField(blank=True, null=True)
+    
+    class Meta:
+        db_table = 'ot_detalle'
+        ordering = ['id_paso__id']
+```
+
+### Step Definition Template
+
+```python operaciones/models/ote_models.py
+class PasoOt(models.Model):
+    descripcion = models.CharField(max_length=200)
+    orden = models.CharField(blank=True, null=True, max_length=10)
+    activo = models.BooleanField(default=True)
+    importancia = models.FloatField(default=0, blank=True, null=True)
+    tipo = models.ForeignKey(Tipo, on_delete=models.CASCADE, blank=True, null=True, default=1, related_name='tipos_ot')
+    comentario = models.TextField(blank=True, null=True)
+    id_tipo_cliente = models.ForeignKey(Tipo, on_delete=models.CASCADE, null=True, blank=True, related_name='tipo_cliente')
+```
+
+<Warning>
+  Steps are automatically created when a new work order is initialized. The step templates used depend on the work order type and client type.
+</Warning>
+
+## Progress Calculation
+
+Work order progress is calculated using a weighted formula:
+
+```python operaciones/views/ote.py
+progreso_final = int((progreso_tiempo * 0.7) + (progreso_pasos * 0.3))
+```
+
+<Steps>
+  <Step title="Calculate Time Progress">
+    Percentage of elapsed time between start and end dates (70% weight)
+  </Step>
+  <Step title="Calculate Step Progress">
+    Percentage of completed steps out of total steps (30% weight)
+  </Step>
+  <Step title="Combine Results">
+    Weighted average provides overall work order progress
+  </Step>
+</Steps>
+
+## URL Endpoints
+
+The following endpoints are available for work order operations:
+
+```python operaciones/urls.py
+# URLs para OTE
+path('ot/', ote.lista_ote, name='lista_ot'),
+path('ot/datatable/', ote.datatable_ot, name='datatable_ot'),
+path('ot/obtener_datos/', ote.obtener_datos_ot, name='obtener_datos_ot'),
+path('ot/obtener_ot_iniciales/', ote.obtener_ots_principales, name='obtener_ots_principales'),
+path('ot/eliminar/', ote.eliminar_ot, name='eliminar_ot'),
+path('ot/editar/', ote.editar_ot, name='editar_ot'),
+path('ot/crear-ot-reprogramacion/', ote.crear_ot, name='crear_ot'),
+path('ot/cambiar_estatus_ot/', ote.cambiar_estatus_ot, name='cambiar_estatus_ot'),
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Creating Work Orders" icon="plus" href="/features/ote/creating-work-orders">
+    Learn how to create and configure new work orders
+  </Card>
+  <Card title="Scheduling" icon="calendar" href="/features/ote/scheduling">
+    Understand scheduling and timeline management
+  </Card>
+  <Card title="Reprogramming" icon="rotate" href="/features/ote/reprogramming">
+    Master work order reprogramming workflows
+  </Card>
+  <Card title="Import Annexes" icon="file-import" href="/features/ote/import-annexes">
+    Import and manage Excel annexes with budget data
+  </Card>
+</CardGroup>

@@ -1,0 +1,435 @@
+---
+title: 'User Permissions & Roles'
+description: 'Understand user roles, permissions, and access control in SASCOP BME SubTec'
+icon: 'user-shield'
+---
+
+## Overview
+
+SASCOP BME SubTec uses Django's permission system to control access to different modules and features. Permissions are assigned to users through groups and individual user settings.
+
+## Permission Levels
+
+<CardGroup cols={3}>
+  <Card title="View" icon="eye">
+    Read-only access to view data
+  </Card>
+  
+  <Card title="Add" icon="plus">
+    Create new records
+  </Card>
+  
+  <Card title="Change" icon="pen-to-square">
+    Edit existing records
+  </Card>
+  
+  <Card title="Delete" icon="trash">
+    Delete or deactivate records
+  </Card>
+  
+  <Card title="Custom" icon="gear">
+    Special permissions for specific features
+  </Card>
+</CardGroup>
+
+## User Roles
+
+### Administrator
+
+<Card title="Full System Access" icon="user-crown">
+  **Permissions**:
+  - Manage all users and permissions
+  - Configure system catalogs
+  - Access all modules without restriction
+  - View activity logs
+  - Execute administrative tasks
+  
+  **Use Cases**:
+  - System configuration
+  - User management
+  - Data maintenance
+  - Security oversight
+</Card>
+
+### Project Manager
+
+<Card title="Project Oversight" icon="user-tie">
+  **Permissions**:
+  - Create and manage PTEs
+  - Approve work orders
+  - View production reports
+  - Assign resources
+  - Track project progress
+  
+  **Restrictions**:
+  - Cannot modify system catalogs
+  - Cannot manage user permissions
+</Card>
+
+### Field Supervisor
+
+<Card title="Operational Control" icon="user-hard-hat">
+  **Permissions**:
+  - Record daily production
+  - Update work order status
+  - Upload field evidence
+  - Generate progress reports
+  
+  **Restrictions**:
+  - Cannot create PTEs
+  - Cannot approve work orders
+  - Limited catalog access
+</Card>
+
+### Accounting/Finance
+
+<Card title="Financial Management" icon="calculator">
+  **Permissions**:
+  - View all financial data
+  - Validate production for billing
+  - Generate financial reports
+  - Manage payment status
+  
+  **Restrictions**:
+  - Cannot modify production volumes
+  - Cannot change work order details
+</Card>
+
+### Read-Only User
+
+<Card title="View Access Only" icon="book-open">
+  **Permissions**:
+  - View PTEs and work orders
+  - Access reports
+  - View production data
+  
+  **Restrictions**:
+  - Cannot create or modify any data
+  - Cannot access administrative features
+</Card>
+
+## Module-Specific Permissions
+
+### PTE Management
+
+<AccordionGroup>
+  <Accordion title="View PTEs" icon="eye">
+    **Permission Code**: `operaciones.view_pteheader`
+    
+    Allows users to view the list of PTEs and their details.
+    
+    **Required for**:
+    - Viewing PTE list
+    - Accessing PTE details
+    - Viewing Centro de Consulta
+  </Accordion>
+
+  <Accordion title="Create PTEs" icon="plus">
+    **Permission Code**: `operaciones.add_pteheader`
+    
+    ```python operaciones/views/pte.py
+    @require_http_methods(["POST"])
+    @login_required
+    @registrar_actividad
+    def crear_pte(request):
+        # PTE creation logic
+        pte_header = PTEHeader.objects.create(
+            oficio_pte=oficio_pte,
+            oficio_solicitud=oficio_solicitud,
+            descripcion_trabajo=descripcion_trabajo,
+            # ...
+        )
+    ```
+  </Accordion>
+
+  <Accordion title="Modify PTEs" icon="pen">
+    **Permission Code**: `operaciones.change_pteheader`
+    
+    Edit existing PTE information including:
+    - Description and details
+    - Dates and deadlines
+    - Responsible parties
+    - Status changes
+  </Accordion>
+
+  <Accordion title="Delete PTEs" icon="trash">
+    **Permission Code**: `operaciones.delete_pteheader`
+    
+    ```python operaciones/views/pte.py
+    @require_http_methods(["POST"])
+    @login_required
+    @registrar_actividad
+    def eliminar_pte(request):
+        if not request.user.has_perm('operaciones.delete_pteheader'):
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'No tienes permiso para eliminar PTEs',
+                'exito': False
+            })
+    ```
+    
+    <Warning>
+      Deletion is logical (sets estatus=0), not physical. Data remains in database.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Centro de Consulta" icon="search">
+    **Permission Code**: `operaciones.view_centro_consulta`
+    
+    Custom permission for viewing the consultation center:
+    
+    ```python operaciones/models/pte_models.py
+    class Meta:
+        db_table = 'pte_header'
+        permissions = [
+            ("view_centro_consulta", "Puede visualizar el centro de consulta"),
+        ]
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Work Order Management
+
+<Steps>
+  <Step title="View Work Orders">
+    **Permission**: `operaciones.view_ote`
+    
+    Access to work order list and details
+  </Step>
+  
+  <Step title="Create Work Orders">
+    **Permission**: `operaciones.add_ote`
+    
+    Create new work orders from approved PTEs
+  </Step>
+  
+  <Step title="Modify Work Orders">
+    **Permission**: `operaciones.change_ote`
+    
+    Update work order information and status
+  </Step>
+  
+  <Step title="Delete Work Orders">
+    **Permission**: `operaciones.delete_ote`
+    
+    Remove or deactivate work orders
+  </Step>
+</Steps>
+
+### Production Management
+
+<Card title="Production Permissions" icon="industry">
+  **View Production**: `operaciones.view_produccion`
+  - View production grids
+  - Access production reports
+  
+  **Record Production**: `operaciones.add_produccion`
+  - Enter daily production volumes
+  - Create production records
+  
+  **Modify Production**: `operaciones.change_produccion`
+  - Edit production values
+  - Correct errors
+  
+  **Validate Production**: `operaciones.validate_produccion`
+  - Lock production periods
+  - Approve for billing
+</Card>
+
+### Catalog Management
+
+<AccordionGroup>
+  <Accordion title="View Catalogs" icon="list">
+    Most users can view catalog data for reference purposes.
+  </Accordion>
+
+  <Accordion title="Modify Catalogs" icon="wrench">
+    **Restricted to Administrators**
+    
+    Example permission check:
+    
+    ```python operaciones/views/catalogos.py
+    @require_http_methods(["POST"])
+    def editar_tipos(request):
+        if not request.user.has_perm('operaciones.change_tipo'):
+            return JsonResponse({
+                'tipo_aviso': 'error',
+                'detalles': 'No tienes permisos para editar',
+                'exito': False
+            })
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Activity Logging
+
+All user actions are logged for audit purposes:
+
+```python operaciones/models/registro_actividad_models.py
+class RegistroActividad(models.Model):
+    registro_id = models.IntegerField(null=True, blank=True)
+    evento = models.TextField(null=True, blank=True)
+    campo = models.TextField(blank=True, null=True)
+    valor_anterior = models.TextField(blank=True, null=True)
+    valor_actual = models.TextField(blank=True, null=True)
+    afectacion = models.TextField(blank=True, null=True)
+    fecha = models.DateTimeField(blank=True, null=True)
+    usuario_id = models.ForeignKey(User, on_delete=models.CASCADE)
+```
+
+<Note>
+  The `@registrar_actividad` decorator automatically logs all create, update, and delete operations.
+</Note>
+
+## Checking User Permissions
+
+### In Python Views
+
+```python
+# Check if user has specific permission
+if request.user.has_perm('operaciones.change_pteheader'):
+    # Allow editing
+    pass
+else:
+    # Return error
+    return JsonResponse({'error': 'Permission denied'})
+
+# Check if user is staff
+if request.user.is_staff:
+    # Show admin options
+    pass
+
+# Check if user is superuser
+if request.user.is_superuser:
+    # Full access
+    pass
+```
+
+### In Templates
+
+```django
+{% if perms.operaciones.change_pteheader %}
+    <button>Edit PTE</button>
+{% endif %}
+
+{% if user.is_staff %}
+    <a href="/admin/">Admin Panel</a>
+{% endif %}
+```
+
+## User Status
+
+### Active Users
+
+<Card title="Active Status" icon="circle-check">
+  Users with `is_active=True` can log in and access the system according to their permissions.
+  
+  ```python operaciones/views/registro_actividad.py
+  usuarios = User.objects.filter(is_active=True).values(
+      'id', 'username', 'first_name', 'last_name', 'email'
+  )
+  ```
+</Card>
+
+### Inactive Users
+
+<Warning>
+  Users with `is_active=False` cannot log in. This is used for:
+  - Temporary suspensions
+  - Former employees
+  - Security lockouts
+</Warning>
+
+### Staff Status
+
+<Note>
+  `is_staff=True` grants access to the Django admin interface at `/admin/`
+</Note>
+
+## Permission Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Principle of Least Privilege" icon="lock">
+    Grant users only the minimum permissions needed for their job function
+  </Card>
+  
+  <Card title="Use Groups" icon="users">
+    Assign permissions to groups rather than individual users for easier management
+  </Card>
+  
+  <Card title="Regular Audits" icon="clipboard-check">
+    Review user permissions quarterly to ensure they remain appropriate
+  </Card>
+  
+  <Card title="Document Changes" icon="file-pen">
+    Log all permission changes in the activity log with justification
+  </Card>
+</CardGroup>
+
+## Common Permission Scenarios
+
+### Scenario 1: New Field Supervisor
+
+<Steps>
+  <Step title="Create User Account">
+    Admin creates account with basic info
+  </Step>
+  
+  <Step title="Assign to Group">
+    Add user to "Field Supervisors" group
+  </Step>
+  
+  <Step title="Grant Specific Permissions">
+    - View PTEs and OTs
+    - Add/Change Production
+    - View Reports
+  </Step>
+  
+  <Step title="Test Access">
+    Verify user can access needed features
+  </Step>
+</Steps>
+
+### Scenario 2: Temporary Read-Only Access
+
+<Steps>
+  <Step title="Create Limited Account">
+    Set up account with viewer role
+  </Step>
+  
+  <Step title="Set Expiration">
+    Note account expiration date
+  </Step>
+  
+  <Step title="Grant View Permissions Only">
+    - View PTEs
+    - View OTs
+    - View Reports
+  </Step>
+  
+  <Step title="Deactivate When Done">
+    Set `is_active=False` after project ends
+  </Step>
+</Steps>
+
+## Viewing Your Permissions
+
+<Note>
+  Contact your system administrator to review your current permissions or request changes.
+</Note>
+
+Administrators can view user permissions at:
+- **Django Admin**: `/admin/auth/user/`
+- **Activity Logs**: View permission changes in activity log
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Managing Users" icon="users-gear" href="/guides/admin/managing-users">
+    Admin guide to user management
+  </Card>
+  
+  <Card title="Activity Logs" icon="clock-rotate-left" href="/guides/admin/activity-logs">
+    View and audit user activities
+  </Card>
+</CardGroup>
