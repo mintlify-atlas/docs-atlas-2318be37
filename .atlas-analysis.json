@@ -1,0 +1,210 @@
+{
+  "projectType": "saas",
+  "projectName": "SASCOP BME SubTec",
+  "projectDescription": "Project management system for Blue Marine Energy SubTec offshore operations",
+  "theme": "aspen",
+  "primaryColor": "#0066CC",
+  "lightColor": "#4DA3FF",
+  "darkColor": "#004C99",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/user-roles",
+              "concepts/workflow"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "PTE Management",
+            "pages": [
+              "features/pte/overview",
+              "features/pte/creating-pte",
+              "features/pte/workflow-steps",
+              "features/pte/status-tracking"
+            ]
+          },
+          {
+            "group": "Work Orders (OTE)",
+            "pages": [
+              "features/ote/overview",
+              "features/ote/creating-work-orders",
+              "features/ote/scheduling",
+              "features/ote/reprogramming",
+              "features/ote/import-annexes"
+            ]
+          },
+          {
+            "group": "Production Tracking",
+            "pages": [
+              "features/production/overview",
+              "features/production/daily-reports",
+              "features/production/monthly-reports",
+              "features/production/gpu-management",
+              "features/production/schedule-tracking"
+            ]
+          },
+          {
+            "group": "Catalogs & Configuration",
+            "pages": [
+              "features/catalogs/overview",
+              "features/catalogs/products",
+              "features/catalogs/sites-fronts",
+              "features/catalogs/clients-responsibles",
+              "features/catalogs/status-types"
+            ]
+          },
+          {
+            "group": "Query Center",
+            "pages": [
+              "features/centro-consulta/overview",
+              "features/centro-consulta/global-search",
+              "features/centro-consulta/dashboards",
+              "features/centro-consulta/reports-export"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "User Guide",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "guides/authentication",
+              "guides/dashboard-navigation",
+              "guides/user-permissions"
+            ]
+          },
+          {
+            "group": "Common Tasks",
+            "pages": [
+              "guides/managing-proposals",
+              "guides/executing-work-orders",
+              "guides/recording-production",
+              "guides/generating-reports"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "guides/admin/managing-users",
+              "guides/admin/configuring-catalogs",
+              "guides/admin/activity-logs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/introduction",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/pte",
+              "api/ote",
+              "api/production",
+              "api/catalogs",
+              "api/statistics"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "api/models/pte",
+              "api/models/ote",
+              "api/models/production",
+              "api/models/catalogs"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "development/environment-setup",
+              "development/database-configuration",
+              "development/running-locally"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "development/project-structure",
+              "development/data-models",
+              "development/middleware",
+              "development/utilities"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "development/deployment/overview",
+              "development/deployment/environment-variables",
+              "development/deployment/database-migrations",
+              "development/deployment/static-files"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Technical-economic proposal (PTE) management with workflow tracking",
+    "Work order (OTE) creation, scheduling, and reprogramming",
+    "Production tracking with daily and monthly reporting",
+    "GPU management and photographic evidence tracking",
+    "Master catalogs for products, sites, clients, and concepts",
+    "Query center with global search and interactive dashboards",
+    "Import/export capabilities for Excel annexes and MPP schedules",
+    "Activity logging and user permission management",
+    "Email notifications and automated report generation",
+    "Schedule version control and task dependency tracking"
+  ],
+  "publicApiSurface": [
+    "/api/estadisticas/ - Get system statistics",
+    "/api/ptes/ - List all PTEs",
+    "/api/ptes/<id>/ - Get PTE details",
+    "/accounts/login/ - User authentication",
+    "/pte/ - PTE listing and management",
+    "/pte/<id>/ - PTE detail view",
+    "/pte/crear/ - Create new PTE",
+    "/ot/ - Work order listing",
+    "/ot/crear-ot-reprogramacion/ - Create work order",
+    "/produccion/ - Production tracking",
+    "/produccion/guardar_produccion_masiva/ - Bulk production save",
+    "/catalogos/producto/ - Product catalog",
+    "/catalogos/sitios/ - Sites catalog",
+    "/catalogos/frentes/ - Fronts catalog",
+    "/centro_consulta/busqueda-global/ - Global search API",
+    "/centro_consulta/documentos-unificados/ - Unified documents",
+    "/centro_consulta/descargar-excel/ - Export to Excel"
+  ]
+}
